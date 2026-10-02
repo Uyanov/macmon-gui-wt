@@ -171,7 +171,7 @@ ESC——如果 ESC 绑定了退出，一滚动程序就没了。这个 bug 在�
   调速，**但本项目没有实现也没有测试过写操作**。真要做得自己确认权限和取值边界——写错
   可能让机器过热或风扇狂转，而这是真实的硬件副作用，不是能随便试的。
 
-调试用 `make sanitize`（ASan + UBSan）。
+调试用 `make sanitize`（ASan + UBSan）；产物是独立的 `macmon-sanitize`，不会污染常规构建的 `build/`。
 
 注意 macOS 上**没有** LeakSanitizer：`ASAN_OPTIONS=detect_leaks=1` 不会去查内存泄漏，
 而是让程序在启动瞬间直接退出（只打印一行 `detect_leaks is not supported on this

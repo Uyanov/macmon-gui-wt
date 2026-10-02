@@ -1,6 +1,7 @@
 # 构建产物
 build/
 macmon
+macmon-sanitize
 MacMonitor.app/
 
 # 访达留下的

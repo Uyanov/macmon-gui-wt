@@ -82,11 +82,17 @@ $(CONTENTS)/PkgInfo:
 
 # AddressSanitizer + UndefinedBehaviorSanitizer。macOS 上没有 LeakSanitizer：
 # ASAN_OPTIONS=detect_leaks=1 不会去查泄漏，而是让程序在启动那一刻直接中止。
+# 直接编译到独立的 $(SANBIN)，不写共享的 build/：否则 ASan 目标文件会污染普通
+# 构建，之后 make 空转、改源码后链接失败（见 .scratch/audit-2026-10-02.md #9）。
+SANBIN  := macmon-sanitize
 sanitize: CFLAGS += -fsanitize=address,undefined -fno-omit-frame-pointer
-sanitize: clean all
+sanitize: $(SANBIN)
+
+$(SANBIN): $(SRCS)
+	$(CC) $(CFLAGS) -o $@ $(SRCS) $(LDLIBS)
 
 clean:
-	rm -rf $(OBJDIR) $(BIN) $(APP)
+	rm -rf $(OBJDIR) $(BIN) $(APP) $(SANBIN)
 
 .PHONY: all app clean sanitize
 
