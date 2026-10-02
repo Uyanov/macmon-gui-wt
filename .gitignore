@@ -6,3 +6,6 @@ MacMonitor.app/
 
 # 访达留下的
 .DS_Store
+
+# 调试符号
+*.dSYM/
