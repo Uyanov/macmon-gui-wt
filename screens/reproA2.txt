@@ -1,0 +1,30 @@
+ MacMonitor  13:37:38   every 3.33s   q quit   +/- speed   c/m sort   space pause
+ CPU    [█████████████████████████░░░░░░░░░░░░░░░░]   60.2%   u 37.6  s 22.6  i 39.8
+ MEM    [█████████████████████████░░░░░░░░░░░░░░░░]   60.2%   9.6G / 16.0G   wired 3.5G   comp 845M
+ SWAP   [█████████████████░░░░░░░░░░░░░░░░░░░░░░░░]   40.5%   829M / 2.0G
+ DISK   [█████████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░]   31.9%   74.4G / 233G   free 159G
+ FAN    [█████████████████████████████████████████]8052 RPM   min 2700   max 8000
+
+ CPU 200s▄▅
+ LOAD 2.96 4.43 5.71   UP 41d 21h 29m   TASKS 64
+
+     PID COMMAND                                    CPU%      MEM
+ ──────────────────────────────────────────────────────────────────────────────────────────────────
+   66470 macmon-这是一个很长的中                            63.6     448K
+   68389 Code Helper (Renderer)                     45.0     627M
+   68386 Code Helper                                23.4    97.5M
+   68447 cpptools                                   15.2    39.5M
+   68383 Code                                       10.0     169M
+   68446 Code Helper (Renderer)                      6.8     384M
+   68869 com.apple.WebKit.WebContent                 5.8     251M
+   68749 com.apple.WebKit.Networking                 4.8    24.7M
+   68395 Code Helper (Plugin)                        3.5     337M
+   36927 Podcasts                                    3.1    57.0M
+   68880 claude                                      2.2     427M
+   72425 macmon                                      1.2    13.9M
+   72423 Python                                      0.9     9.5M
+     498 UniversalControl                            0.7    12.6M
+   68399 Code Helper                                 0.2    50.9M
+   68392 Code Helper                                 0.1    71.7M
+   68540 copilot-runtime                             0.1     8.9M
+   68394 Code Helper                                 0.1    47.1M

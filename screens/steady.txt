@@ -1,0 +1,30 @@
+                    5
+                                                       7.6         7       9  i 72.4
+                    2
+                    ░                                  6.6       2.3  s 14.3  i 73.4
+ MacMonitor  18:45:29   every 1.00s   q quit   +/- speed   c/m sort   space pause
+ CPU    [██████████████████░░░░░░░░░░░░░░░░░░░░░░░]81014.4%   u 16.0  s 28.4  i 55.6
+ MEM    [██████████████████████████░░░░░░░░░░░░░░░]   62.7%   10.0G / 16.0G   wired 3.0G   comp 850M
+ SWAP   [█▄▃█▃▃▃████████░░░░░░░░░░░░░░░░░░░░░░░░░░]   35.8%   733M / 2.0G
+ DISK   [2████████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░]   32.5%   75.8G / 233G   free 158G
+ FAN    [███▃█████████████████████████████████████]7970 RPM   min 2700   max 8000
+
+ CPU 60s ▄
+ LOAD 3.24 3.45 3.65   UP 41d 23h 15m   TASKS 64     9.7
+      80 claude                                      1.1     50
+     386 Code Helper                                C0.8     10EM
+   68389 Code Helper (Renderer)──────────────────────0.7     634───────────────────────────────────
+   76451 macmon                                     90.4    13.9K
+   68389 Code Helper (Renderer)ntent                10.3     634M
+   76432 Python     ebKit.Networking                 0.3     9.0M
+   76432 Python                                      2.2     9.0M
+   76450 Python                                      0.1     9.5M
+     422 rapportdper                                 0.1     6.9M
+   13892 AquaAppearanceHelper                        0.1     4.6M
+     422 rapportd            r)                      0.1     6.9M
+   68386 CodelHelpertimeugin)                        0.1     108M
+   68540 copilot-runtimenderer)                      0.1     819M
+   68447 cpptools                                    0.0    43.1M
+    1417 verge-mihomo d                                     41.5
+   20833 ControlCenter                                      40.2
+   68749 com.apple.WebKit.Networking                 0.0    27.8M

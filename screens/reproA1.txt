@@ -1,0 +1,30 @@
+ MacMonitor  13:37:36   every 3.33s   q quit   +/- speed   c/m sort   space pause
+ CPU    [███████████████░░░░░░░░░░░░░░░░░░░░░░░░░░]   36.8%   u 16.2  s 20.5  i 63.2
+ MEM    [█████████████████████████░░░░░░░░░░░░░░░░]   60.1%   9.6G / 16.0G   wired 3.5G   comp 845M
+ SWAP   [█████████████████░░░░░░░░░░░░░░░░░░░░░░░░]   40.5%   829M / 2.0G
+ DISK   [█████████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░]   31.9%   74.4G / 233G   free 159G
+ FAN    [████████████████████████████████████████░]7793 RPM   min 2700   max 8000
+
+ CPU 200s▃▄
+ LOAD 2.96 4.43 5.71   UP 41d 21h 29m   TASKS 64
+
+     PID COMMAND                                    CPU%      MEM
+ ──────────────────────────────────────────────────────────────────────────────────────────────────
+   66470 macmon-这是一个很长的中                            98.3     448K
+   68869 com.apple.WebKit.WebContent                16.4     251M
+   68749 com.apple.WebKit.Networking                14.1    24.7M
+     391 Finder                                      2.9    90.9M
+   68386 Code Helper                                 1.7    97.5M
+   68389 Code Helper (Renderer)                      1.1     630M
+   72422 macmon                                      0.7    13.9M
+   72420 Pythonts                                    0.5     9.5M
+   68880 claude                                      0.4     427M
+   68399 Code Helper                                 0.2    50.9M
+   68540 copilot-runtime                             0.1     8.9M
+   68383 Code                                        0.1     169M
+   68446 Code Helper (Renderer)                      0.1     384M
+   68383 Code                                        0.0     169M
+   68447 cpptools                                    0.0    39.5M
+     411 CalendarAgent                               0.0    37.0M
+    1417 verge-mihomo                                0.0    40.4M
+   20833 ControlCenter                               0.0    40.6M

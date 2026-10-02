@@ -1,0 +1,6 @@
+ MacMonitor
+ CPU    [██
+ MEM    [██
+ SWAP   [██
+ DISK   [██
+ FAN    [██

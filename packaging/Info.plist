@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- 入口是启动器而不是 macmon 本身：TUI 需要 tty，见 launcher.sh 顶部的说明。 -->
+	<key>CFBundleExecutable</key>
+	<string>MacMonitor</string>
+
+	<!-- CFBundleIconFile 写的是 Resources 里的文件名，不带 .icns 后缀。 -->
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+
+	<!-- 没有开发者证书，这个标识符只要在本机唯一即可。 -->
+	<key>CFBundleIdentifier</key>
+	<string>dev.macmon.MacMonitor</string>
+
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>MacMonitor</string>
+	<key>CFBundleDisplayName</key>
+	<string>MacMonitor</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+
+	<!-- 这两个值由 Makefile 用 sed 注入，见 packaging/Info.plist 的生成规则。 -->
+	<key>CFBundleShortVersionString</key>
+	<string>@VERSION@</string>
+	<key>CFBundleVersion</key>
+	<string>@BUILD@</string>
+
+	<!-- clock_gettime(CLOCK_MONOTONIC) 需要 10.12；取 10.13 留一点余量。
+	     README 里那台机器跑的是 12.7.6，这里只是标明下界。 -->
+	<key>LSMinimumSystemVersion</key>
+	<string>10.13</string>
+
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.utilities</string>
+
+	<key>NSHighResolutionCapable</key>
+	<true/>
+
+	<key>NSHumanReadableCopyright</key>
+	<string>macmon — 纯 C + ncurses，无第三方依赖</string>
+</dict>
+</plist>
