@@ -1,11 +1,22 @@
 #import <Cocoa/Cocoa.h>
 #include "core.h"
 
+enum {
+    METRIC_CPU = 0,
+    METRIC_MEMORY,
+    METRIC_SWAP,
+    METRIC_DISK,
+    METRIC_COUNT,
+};
+
 @interface MacMonitorApp : NSObject <NSApplicationDelegate, NSTableViewDataSource, NSTableViewDelegate>
 @property(nonatomic) monitor_core_t *core;
 @property(nonatomic) core_snapshot_t snapshot;
 @property(nonatomic) NSTimer *timer;
-@property(nonatomic) NSMutableArray<NSTextField *> *metrics;
+@property(nonatomic) NSMutableArray<NSProgressIndicator *> *progressIndicators;
+@property(nonatomic) NSMutableArray<NSTextField *> *metricValues;
+@property(nonatomic) NSTextField *fanStatus;
+@property(nonatomic) NSTextField *history;
 @property(nonatomic) NSTextField *status;
 @property(nonatomic) NSTableView *table;
 @property(nonatomic) proc_sort_t sort;
@@ -18,6 +29,48 @@
     label.font = [NSFont monospacedSystemFontOfSize:size weight:NSFontWeightRegular];
     label.lineBreakMode = NSLineBreakByTruncatingTail;
     return label;
+}
+
+- (NSStackView *)metricRow:(NSString *)title {
+    NSStackView *row = [NSStackView stackViewWithViews:@[]];
+    row.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    row.alignment = NSLayoutAttributeCenterY;
+    row.spacing = 8;
+    row.translatesAutoresizingMaskIntoConstraints = NO;
+
+    NSTextField *titleLabel = [self label:title size:13];
+    titleLabel.alignment = NSTextAlignmentRight;
+    titleLabel.lineBreakMode = NSLineBreakByTruncatingTail;
+    [titleLabel.widthAnchor constraintEqualToConstant:76].active = YES;
+
+    NSProgressIndicator *progress = [[NSProgressIndicator alloc] initWithFrame:NSZeroRect];
+    progress.style = NSProgressIndicatorStyleBar;
+    progress.indeterminate = NO;
+    progress.minValue = 0.0;
+    progress.maxValue = 100.0;
+    progress.controlSize = NSControlSizeSmall;
+    progress.translatesAutoresizingMaskIntoConstraints = NO;
+    [progress.widthAnchor constraintGreaterThanOrEqualToConstant:110].active = YES;
+    [progress setContentHuggingPriority:NSLayoutPriorityDefaultLow
+                                forOrientation:NSLayoutConstraintOrientationHorizontal];
+    [progress setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
+                                               forOrientation:NSLayoutConstraintOrientationHorizontal];
+
+    NSTextField *value = [self label:@"不可用" size:12];
+    value.alignment = NSTextAlignmentLeft;
+    value.lineBreakMode = NSLineBreakByTruncatingTail;
+    value.maximumNumberOfLines = 1;
+    [value setContentHuggingPriority:NSLayoutPriorityDefaultLow
+                              forOrientation:NSLayoutConstraintOrientationHorizontal];
+    [value setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
+                                             forOrientation:NSLayoutConstraintOrientationHorizontal];
+
+    [row addArrangedSubview:titleLabel];
+    [row addArrangedSubview:progress];
+    [row addArrangedSubview:value];
+    [self.progressIndicators addObject:progress];
+    [self.metricValues addObject:value];
+    return row;
 }
 
 - (void)applicationDidFinishLaunching:(NSNotification *)note {
@@ -39,12 +92,12 @@
                    NSWindowStyleMaskMiniaturizable | NSWindowStyleMaskResizable)
         backing:NSBackingStoreBuffered defer:NO];
     window.title = @"MacMonitor";
-    window.minSize = NSMakeSize(620, 420);
+    window.minSize = NSMakeSize(520, 360);
 
     NSStackView *root = [NSStackView stackViewWithViews:@[]];
     root.orientation = NSUserInterfaceLayoutOrientationVertical;
-    root.alignment = NSLayoutAttributeLeading;
-    root.spacing = 12;
+    root.alignment = NSLayoutAttributeWidth;
+    root.spacing = 10;
     root.edgeInsets = NSEdgeInsetsMake(18, 18, 18, 18);
     root.translatesAutoresizingMaskIntoConstraints = NO;
     [window.contentView addSubview:root];
@@ -55,13 +108,29 @@
         [root.bottomAnchor constraintEqualToAnchor:window.contentView.bottomAnchor]
     ]];
 
-    self.metrics = [NSMutableArray array];
-    for (NSString *title in @[@"CPU", @"内存", @"交换空间", @"磁盘", @"风扇", @"CPU 走势"]) {
-        NSTextField *label = [self label:title size:15];
-        [self.metrics addObject:label];
-        [root addArrangedSubview:label];
-    }
-    self.status = [self label:@"正在采样…" size:13];
+    self.progressIndicators = [NSMutableArray arrayWithCapacity:METRIC_COUNT];
+    self.metricValues = [NSMutableArray arrayWithCapacity:METRIC_COUNT];
+    NSStackView *metrics = [NSStackView stackViewWithViews:@[]];
+    metrics.orientation = NSUserInterfaceLayoutOrientationVertical;
+    metrics.alignment = NSLayoutAttributeWidth;
+    metrics.spacing = 6;
+    [metrics addArrangedSubview:[self metricRow:@"CPU"]];
+    [metrics addArrangedSubview:[self metricRow:@"内存"]];
+    [metrics addArrangedSubview:[self metricRow:@"交换空间"]];
+    [metrics addArrangedSubview:[self metricRow:@"磁盘"]];
+    [root addArrangedSubview:metrics];
+
+    self.fanStatus = [self label:@"风扇：不可用" size:12];
+    self.fanStatus.lineBreakMode = NSLineBreakByWordWrapping;
+    self.fanStatus.maximumNumberOfLines = 0;
+    [root addArrangedSubview:self.fanStatus];
+
+    self.history = [self label:@"CPU 走势（60 秒）：暂无数据" size:12];
+    self.history.lineBreakMode = NSLineBreakByTruncatingTail;
+    [root addArrangedSubview:self.history];
+
+    self.status = [self label:@"正在采样…" size:12];
+    self.status.lineBreakMode = NSLineBreakByTruncatingTail;
     [root addArrangedSubview:self.status];
 
     self.table = [[NSTableView alloc] initWithFrame:NSZeroRect];
@@ -80,7 +149,9 @@
     scroll.hasVerticalScroller = YES;
     scroll.translatesAutoresizingMaskIntoConstraints = NO;
     [root addArrangedSubview:scroll];
-    [scroll.heightAnchor constraintGreaterThanOrEqualToConstant:200].active = YES;
+    [scroll.heightAnchor constraintGreaterThanOrEqualToConstant:150].active = YES;
+    [scroll setContentHuggingPriority:NSLayoutPriorityDefaultLow
+                              forOrientation:NSLayoutConstraintOrientationVertical];
 
     [window center];
     [window makeKeyAndOrderFront:nil];
@@ -89,40 +160,89 @@
         selector:@selector(refresh:) userInfo:nil repeats:YES];
 }
 
+- (void)setMetric:(NSInteger)index percent:(double)percent value:(NSString *)value
+        available:(BOOL)available stale:(BOOL)stale {
+    NSProgressIndicator *progress = self.progressIndicators[index];
+    NSTextField *display = self.metricValues[index];
+    progress.hidden = !available || stale;
+    progress.doubleValue = MIN(100.0, MAX(0.0, percent));
+    if (stale)
+        display.stringValue = @"数据陈旧";
+    else if (!available)
+        display.stringValue = @"不可用";
+    else
+        display.stringValue = value;
+}
+
+- (NSString *)fanSummary {
+    if (_snapshot.stale_mask & CORE_STALE_FAN)
+        return @"风扇：数据陈旧";
+    if (!_snapshot.has_fans || _snapshot.fans.count <= 0)
+        return @"风扇：无传感器或不可用";
+
+    NSMutableString *summary = [NSMutableString stringWithString:@"风扇："];
+    for (int i = 0; i < _snapshot.fans.count && i < SMC_MAX_FANS; i++) {
+        if (i > 0)
+            [summary appendString:@"   "];
+        [summary appendFormat:@"风扇 %d %.0f RPM", i + 1, _snapshot.fans.rpm[i]];
+    }
+    return summary;
+}
+
 - (void)refresh:(NSTimer *)timer {
     (void)timer;
     if (core_snapshot(self.core, &_snapshot) != 0)
         return;
+
+    const BOOL cpuAvailable = !(_snapshot.stale_mask & CORE_STALE_CPU);
+    const BOOL memAvailable = !(_snapshot.stale_mask & CORE_STALE_MEM) && _snapshot.mem.total > 0;
+    const BOOL swapAvailable = !(_snapshot.stale_mask & CORE_STALE_MEM) && _snapshot.mem.swap_total > 0;
+    const BOOL diskAvailable = !(_snapshot.stale_mask & CORE_STALE_DISK) && _snapshot.disk.total > 0;
     double memUsed = (double)(_snapshot.mem.app + _snapshot.mem.wired + _snapshot.mem.compressed);
-    double memPct = _snapshot.mem.total ? 100.0 * memUsed / _snapshot.mem.total : 0;
-    double diskPct = _snapshot.disk.total ? 100.0 * _snapshot.disk.used / _snapshot.disk.total : 0;
-    NSString *fan = _snapshot.has_fans && _snapshot.fans.count > 0
-        ? [NSString stringWithFormat:@"风扇: %.0f RPM", _snapshot.fans.rpm[0]] : @"风扇: 不可用";
-    _metrics[0].stringValue = [NSString stringWithFormat:@"CPU: %.1f%% (用户 %.1f%% / 系统 %.1f%% / 空闲 %.1f%%)",
+    double memPct = memAvailable ? 100.0 * memUsed / _snapshot.mem.total : 0.0;
+    double swapPct = swapAvailable ? 100.0 * _snapshot.mem.swap_used / _snapshot.mem.swap_total : 0.0;
+    double diskPct = diskAvailable ? 100.0 * _snapshot.disk.used / _snapshot.disk.total : 0.0;
+    NSString *cpuValue = [NSString stringWithFormat:@"%.1f%%（用户 %.1f / 系统 %.1f / 空闲 %.1f）",
         _snapshot.cpu.busy, _snapshot.cpu.user, _snapshot.cpu.system, _snapshot.cpu.idle];
-    _metrics[1].stringValue = [NSString stringWithFormat:@"内存: %.1f%%  应用/总计 %.1fG / %.1fG",
+    NSString *memValue = [NSString stringWithFormat:@"%.1f%%  %.1fG / %.1fG",
         memPct, memUsed / 1073741824.0, _snapshot.mem.total / 1073741824.0];
-    _metrics[2].stringValue = [NSString stringWithFormat:@"交换空间: %.1f%%  %.1fG / %.1fG",
-        _snapshot.mem.swap_total ? 100.0 * _snapshot.mem.swap_used / _snapshot.mem.swap_total : 0,
-        _snapshot.mem.swap_used / 1073741824.0, _snapshot.mem.swap_total / 1073741824.0];
-    _metrics[3].stringValue = [NSString stringWithFormat:@"磁盘: %.1f%%  已用 %.1fG / %.1fG",
+    NSString *swapValue = [NSString stringWithFormat:@"%.1f%%  %.1fG / %.1fG",
+        swapPct, _snapshot.mem.swap_used / 1073741824.0,
+        _snapshot.mem.swap_total / 1073741824.0];
+    NSString *diskValue = [NSString stringWithFormat:@"%.1f%%  %.1fG / %.1fG",
         diskPct, _snapshot.disk.used / 1073741824.0, _snapshot.disk.total / 1073741824.0];
-    _metrics[4].stringValue = fan;
-    NSMutableString *history = [NSMutableString stringWithString:@"CPU 走势: "];
+    [self setMetric:METRIC_CPU percent:_snapshot.cpu.busy value:cpuValue
+          available:cpuAvailable stale:(_snapshot.stale_mask & CORE_STALE_CPU) != 0];
+    [self setMetric:METRIC_MEMORY percent:memPct value:memValue
+          available:memAvailable stale:(_snapshot.stale_mask & CORE_STALE_MEM) != 0];
+    [self setMetric:METRIC_SWAP percent:swapPct value:swapValue
+          available:swapAvailable stale:(_snapshot.stale_mask & CORE_STALE_MEM) != 0];
+    [self setMetric:METRIC_DISK percent:diskPct value:diskValue
+          available:diskAvailable stale:(_snapshot.stale_mask & CORE_STALE_DISK) != 0];
+    self.fanStatus.stringValue = [self fanSummary];
+
+    NSMutableString *history = [NSMutableString stringWithString:@"CPU 走势（60 秒）："];
+    static const char glyphs[] = "._:=+*#%";
     for (int i = 0; i < _snapshot.history_len; i++) {
-        int index = (_snapshot.history_head - _snapshot.history_len + i + CORE_CPU_HISTORY) % CORE_CPU_HISTORY;
-        [history appendFormat:@"%c", "._:=+*#%"[(int)MIN(7, MAX(0, _snapshot.history[index] / 100.0 * 7.0))]];
+        int index = (_snapshot.history_head - _snapshot.history_len + i + CORE_CPU_HISTORY)
+            % CORE_CPU_HISTORY;
+        int level = (int)(_snapshot.history[index] / 100.0 * 7.0);
+        level = MIN(7, MAX(0, level));
+        [history appendFormat:@"%c", glyphs[level]];
     }
-    _metrics[5].stringValue = history;
+    if (_snapshot.history_len == 0)
+        [history appendString:@"暂无数据"];
+    self.history.stringValue = history;
+
     long uptime = _snapshot.uptime;
     NSString *up = uptime >= 0
         ? [NSString stringWithFormat:@"运行 %ldd %02ldh %02ldm", uptime / 86400,
             (uptime % 86400) / 3600, (uptime % 3600) / 60]
         : @"运行时间不可用";
-    _status.stringValue = [NSString stringWithFormat:@"负载 %.2f %.2f %.2f   进程 %d   %@   %@",
+    self.status.stringValue = [NSString stringWithFormat:@"负载 %.2f %.2f %.2f   进程 %d   %@   %@",
         _snapshot.load[0], _snapshot.load[1], _snapshot.load[2], _snapshot.proc_total, up,
-        _snapshot.stale_mask ? @"数据陈旧" : @"数据正常"];
-    [_table reloadData];
+        _snapshot.stale_mask ? @"部分数据陈旧" : (_snapshot.paused ? @"已暂停" : @"数据正常")];
+    [self.table reloadData];
 }
 
 - (NSInteger)numberOfRowsInTableView:(NSTableView *)tableView {
@@ -147,10 +267,14 @@
         ]];
     }
     proc_info_t p = _snapshot.procs[row];
-    if ([column.identifier isEqualToString:@"pid"]) cell.textField.stringValue = [NSString stringWithFormat:@"%d", p.pid];
-    else if ([column.identifier isEqualToString:@"name"]) cell.textField.stringValue = [NSString stringWithUTF8String:p.name] ?: @"";
-    else if ([column.identifier isEqualToString:@"cpu"]) cell.textField.stringValue = [NSString stringWithFormat:@"%.1f", p.cpu];
-    else cell.textField.stringValue = [NSString stringWithFormat:@"%.1fM", p.mem / 1048576.0];
+    if ([column.identifier isEqualToString:@"pid"])
+        cell.textField.stringValue = [NSString stringWithFormat:@"%d", p.pid];
+    else if ([column.identifier isEqualToString:@"name"])
+        cell.textField.stringValue = [NSString stringWithUTF8String:p.name] ?: @"";
+    else if ([column.identifier isEqualToString:@"cpu"])
+        cell.textField.stringValue = [NSString stringWithFormat:@"%.1f", p.cpu];
+    else
+        cell.textField.stringValue = [NSString stringWithFormat:@"%.1fM", p.mem / 1048576.0];
     return cell;
 }
 
