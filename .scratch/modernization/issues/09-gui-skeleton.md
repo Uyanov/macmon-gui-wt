@@ -4,9 +4,9 @@
 
 **Blocked by:** 04
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] 双击启动直达 GUI 窗口（不经 Terminal），CPU 面板随快照实时更新
-- [ ] 表现层不阻塞核心采样；关闭窗口正常退出
-- [ ] universal（x86_64 + arm64）构建仍可用；零第三方依赖
-- [ ] ADR 记录 AppKit 选型与理由
+- [x] 双击启动直达 GUI 窗口（不经 Terminal），CPU 面板随快照实时更新
+- [x] 表现层不阻塞核心采样；关闭窗口正常退出
+- [x] universal（x86_64 + arm64）构建仍可用；零第三方依赖
+- [x] ADR 记录 AppKit 选型与理由

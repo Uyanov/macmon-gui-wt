@@ -50,6 +50,7 @@ import time
 import fcntl
 import termios
 import pty
+import unicodedata
 
 # --------------------------------------------------------------------------
 # VT100 screen model
@@ -90,28 +91,52 @@ class Screen:
         self._st = 'GROUND'
         self._buf = ''
         self._priv = False
+        self.scroll_top = 0
+        self.scroll_bottom = self.rows - 1
+
+    def resize(self, cols, rows):
+        old = self.grid
+        self.cols, self.rows = cols, rows
+        self.grid = [[' '] * cols for _ in range(rows)]
+        for r in range(min(rows, len(old))):
+            for c in range(min(cols, len(old[r]))):
+                self.grid[r][c] = old[r][c]
+        self.x = min(self.x, max(0, cols - 1))
+        self.y = min(self.y, max(0, rows - 1))
+        self.scroll_top = 0
+        self.scroll_bottom = rows - 1
+        self.wrap_pending = False
 
     # -- low level edits ---------------------------------------------------
     def _scroll_up(self):
-        self.grid.pop(0)
-        self.grid.append([' '] * self.cols)
+        top, bottom = self.scroll_top, self.scroll_bottom
+        self.grid.pop(top)
+        self.grid.insert(bottom, [' '] * self.cols)
+
+    def _scroll_down(self):
+        top, bottom = self.scroll_top, self.scroll_bottom
+        self.grid.pop(bottom)
+        self.grid.insert(top, [' '] * self.cols)
 
     def _put(self, ch):
         if self.wrap_pending:
             self.wrap_pending = False
             self.x = 0
             self.y += 1
-            if self.y >= self.rows:
-                self.y = self.rows - 1
+            if self.y > self.scroll_bottom:
+                self.y = self.scroll_bottom
                 self._scroll_up()
         if self.charsets[self.gl] == 'acs':
             ch = ACS.get(ch, ch)
         if 0 <= self.y < self.rows and 0 <= self.x < self.cols:
             self.grid[self.y][self.x] = ch
-        if self.x == self.cols - 1:
+        width = 2 if unicodedata.east_asian_width(ch) in ('W', 'F') else 1
+        if width == 2 and self.x + 1 < self.cols:
+            self.grid[self.y][self.x + 1] = ' '
+        if self.x >= self.cols - width:
             self.wrap_pending = True      # deferred wrap, xterm behaviour
         else:
-            self.x += 1
+            self.x += width
 
     def _params(self, raw, default=0):
         raw = raw.lstrip('?')
@@ -143,8 +168,8 @@ class Screen:
             elif ch in '\n\x0b\x0c':
                 self.wrap_pending = False
                 self.y += 1
-                if self.y >= self.rows:
-                    self.y = self.rows - 1
+                if self.y > self.scroll_bottom:
+                    self.y = self.scroll_bottom
                     self._scroll_up()
             elif ch == '\b':
                 self.x = max(0, self.x - 1)
@@ -172,9 +197,8 @@ class Screen:
             elif ch == ')':
                 self._st = 'G1'
             elif ch == 'M':                # reverse index
-                if self.y == 0:
-                    self.grid.insert(0, [' '] * self.cols)
-                    self.grid.pop()
+                if self.y == self.scroll_top:
+                    self._scroll_down()
                 else:
                     self.y -= 1
                 self._st = 'GROUND'
@@ -291,8 +315,14 @@ class Screen:
                 self._scroll_up()
         elif final == 'T':
             for _ in range(max(1, n)):
-                self.grid.insert(0, [' '] * self.cols)
-                self.grid.pop()
+                self._scroll_down()
+        elif final == 'r':
+            top = (p[0] if p[0] else 1) - 1
+            bottom = (p[1] if len(p) > 1 and p[1] else self.rows) - 1
+            if 0 <= top < bottom < self.rows:
+                self.scroll_top, self.scroll_bottom = top, bottom
+            self.x = 0
+            self.y = self.scroll_top
         elif final in 'hl' and self._priv:
             # ?1049 alternate screen, ?25 cursor visibility — tracked, not drawn
             if n == 1049:
@@ -361,7 +391,7 @@ class Session:
             fcntl.ioctl(self.fd, termios.TIOCSWINSZ,
                         struct.pack('HHHH', rows, cols, 0, 0))
         if self.screen.cols != cols or self.screen.rows != rows:
-            self.screen = Screen(cols, rows)
+            self.screen.resize(cols, rows)
 
     def pump(self, timeout=0.15):
         """Drain available output into the screen model. Returns bytes read."""
@@ -532,8 +562,8 @@ def main():
                 body = s.screen.text()
                 with open(path, 'w') as f:
                     f.write(body + '\n')
-                out('--- screen (alt=%s cursor=%d,%d) -> %s'
-                    % (s.screen.alt, s.screen.x, s.screen.y, path))
+                out('--- screen (%dx%d alt=%s cursor=%d,%d) -> %s'
+                    % (s.screen.cols, s.screen.rows, s.screen.alt, s.screen.x, s.screen.y, path))
                 out(body)
                 out('--- end screen')
 

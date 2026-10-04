@@ -4,8 +4,8 @@
 
 **Blocked by:** 09
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] vtool 显示的 minos 与声明一致
-- [ ] 首次打开指引与现实一致（含递归去隔离；不再涉及已退役机制）
-- [ ] 无悬空引用；README 无已知不实叙述
+- [x] `otool` 显示的 minos 与声明一致
+- [x] 首次打开指引与现实一致（含递归去隔离；不再涉及已退役机制）
+- [x] 无悬空引用；README 无已知不实叙述

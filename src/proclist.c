@@ -28,6 +28,14 @@ static int         cached_len;
 static proc_info_t snapshot[CACHE_MAX];    /* 暂存，每次采样复用 */
 static uint64_t    prev_wall_ns;
 
+typedef struct {
+    pid_t pid;
+    char  name[PROC_NAME_MAX];
+} name_cache_entry_t;
+
+static name_cache_entry_t name_cache[CACHE_MAX];
+static int                 name_cache_len;
+
 static uint64_t now_ns(void)
 {
     struct timespec ts;
@@ -52,6 +60,32 @@ static double cached_cpu_pct(pid_t pid)
     return 0.0;
 }
 
+static const char *cached_name(pid_t pid)
+{
+    for (int i = 0; i < name_cache_len; i++)
+        if (name_cache[i].pid == pid)
+            return name_cache[i].name;
+    return NULL;
+}
+
+static const char *process_name(pid_t pid, char name[PROC_NAME_MAX])
+{
+    const char *known = cached_name(pid);
+    if (known)
+        return known;
+
+    if (proc_name(pid, name, PROC_NAME_MAX) <= 0)
+        snprintf(name, PROC_NAME_MAX, "(%d)", pid);
+
+    if (name_cache_len < CACHE_MAX) {
+        name_cache_entry_t *entry = &name_cache[name_cache_len++];
+        entry->pid = pid;
+        snprintf(entry->name, sizeof(entry->name), "%s", name);
+        return entry->name;
+    }
+    return name;
+}
+
 static int cmp_cpu(const void *a, const void *b)
 {
     const proc_info_t *x = a;
@@ -72,8 +106,11 @@ static int cmp_mem(const void *a, const void *b)
     return 0;
 }
 
-int proclist_sample(proc_info_t *out, int max, proc_sort_t sort)
+int proclist_sample_ex(proc_info_t *out, int max, proc_sort_t sort,
+                       int *total_out)
 {
+    if (total_out)
+        *total_out = 0;
     if (max <= 0)
         return 0;
 
@@ -132,9 +169,8 @@ int proclist_sample(proc_info_t *out, int max, proc_sort_t sort)
         }
 
         char name[PROC_NAME_MAX];
-        if (proc_name(pid, name, sizeof(name)) <= 0)
-            snprintf(name, sizeof(name), "(%d)", pid);
-        snprintf(p->name, sizeof(p->name), "%s", name);
+        const char *cached = process_name(pid, name);
+        snprintf(p->name, sizeof(p->name), "%s", cached);
     }
 
     /*
@@ -154,8 +190,16 @@ int proclist_sample(proc_info_t *out, int max, proc_sort_t sort)
     qsort(snapshot, (size_t)n, sizeof(proc_info_t),
           sort == PROC_SORT_MEM ? cmp_mem : cmp_cpu);
 
+    if (total_out)
+        *total_out = n;
+
     if (n > max)
         n = max;
     memcpy(out, snapshot, sizeof(proc_info_t) * (size_t)n);
     return n;
+}
+
+int proclist_sample(proc_info_t *out, int max, proc_sort_t sort)
+{
+    return proclist_sample_ex(out, max, sort, NULL);
 }

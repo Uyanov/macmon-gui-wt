@@ -2,13 +2,9 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<!-- 入口是启动器而不是 macmon 本身：TUI 需要 tty，见 launcher.sh 顶部的说明。 -->
+		<!-- 入口是原生 AppKit 界面，采样核心在后台线程运行。 -->
 	<key>CFBundleExecutable</key>
 	<string>MacMonitor</string>
-
-	<!-- CFBundleIconFile 写的是 Resources 里的文件名，不带 .icns 后缀。 -->
-	<key>CFBundleIconFile</key>
-	<string>AppIcon</string>
 
 	<!-- 没有开发者证书，这个标识符只要在本机唯一即可。 -->
 	<key>CFBundleIdentifier</key>
@@ -29,18 +25,20 @@
 	<key>CFBundleVersion</key>
 	<string>@BUILD@</string>
 
-	<!-- clock_gettime(CLOCK_MONOTONIC) 需要 10.12；取 10.13 留一点余量。
-	     README 里那台机器跑的是 12.7.6，这里只是标明下界。 -->
-	<key>LSMinimumSystemVersion</key>
-	<string>10.13</string>
+		<!-- 与 Makefile 的 -mmacosx-version-min 保持一致。 -->
+		<key>LSMinimumSystemVersion</key>
+		<string>12.0</string>
 
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.utilities</string>
 
-	<key>NSHighResolutionCapable</key>
-	<true/>
+		<key>NSHighResolutionCapable</key>
+		<true/>
+
+		<key>NSAppleEventsUsageDescription</key>
+		<string>MacMonitor 不需要控制其他应用。</string>
 
 	<key>NSHumanReadableCopyright</key>
-	<string>macmon — 纯 C + ncurses，无第三方依赖</string>
+		<string>macmon — AppKit + 纯 C 核心，无第三方依赖</string>
 </dict>
 </plist>

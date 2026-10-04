@@ -55,6 +55,8 @@ enum {
 
 static io_connect_t conn;
 static int          opened;
+static int          fan_limits_valid;
+static fan_info_t   fan_limits;
 
 /* SMC 的 key 是四个字符按大端打包进一个 uint32。 */
 static uint32_t key_to_u32(const char *key)
@@ -91,6 +93,8 @@ static int smc_read(const char *key, uint32_t *type, uint32_t *size,
     if (IOConnectCallStructMethod(conn, SMC_KERNEL_INDEX, &in, sizeof(in),
                                   &out, &out_size) != kIOReturnSuccess)
         return -1;
+    if (out.result != 0 || out.status != 0)
+        return -1;
 
     *size = out.keyInfo.dataSize;
     *type = out.keyInfo.dataType;
@@ -100,6 +104,8 @@ static int smc_read(const char *key, uint32_t *type, uint32_t *size,
     out_size = sizeof(out);
     if (IOConnectCallStructMethod(conn, SMC_KERNEL_INDEX, &in, sizeof(in),
                                   &out, &out_size) != kIOReturnSuccess)
+        return -1;
+    if (out.result != 0 || out.status != 0)
         return -1;
 
     memcpy(bytes, out.bytes, sizeof(out.bytes));
@@ -163,6 +169,8 @@ int smc_open(void)
     }
 
     opened = 1;
+    fan_limits_valid = 0;
+    memset(&fan_limits, 0, sizeof(fan_limits));
     return 0;
 }
 
@@ -172,6 +180,8 @@ void smc_close(void)
         IOServiceClose(conn);
         conn = IO_OBJECT_NULL;
         opened = 0;
+        fan_limits_valid = 0;
+        memset(&fan_limits, 0, sizeof(fan_limits));
     }
 }
 
@@ -187,31 +197,41 @@ int smc_fans(fan_info_t *out)
     if (!opened)
         return -1;
 
-    if (smc_read("FNum", &type, &size, bytes) != 0)
-        return -1;
+    if (!fan_limits_valid) {
+        if (smc_read("FNum", &type, &size, bytes) != 0)
+            return -1;
+        count = (unsigned char)bytes[0];
+        if (count > SMC_MAX_FANS)
+            count = SMC_MAX_FANS;   /* Mac Pro 的风扇可能比我们画得下的多 */
+        fan_limits.count = count;
+        for (int i = 0; i < count; i++) {
+            char key[8];
+            snprintf(key, sizeof(key), "F%dMn", i);
+            if (smc_read(key, &type, &size, bytes) != 0
+                    || decode_number(type, size, bytes, &fan_limits.min_rpm[i]) != 0)
+                return -1;
+            snprintf(key, sizeof(key), "F%dMx", i);
+            if (smc_read(key, &type, &size, bytes) != 0
+                    || decode_number(type, size, bytes, &fan_limits.max_rpm[i]) != 0)
+                return -1;
+        }
+        fan_limits_valid = 1;
+    }
 
-    count = (unsigned char)bytes[0];
-    if (count > SMC_MAX_FANS)
-        count = SMC_MAX_FANS;   /* Mac Pro 的风扇可能比我们画得下的多 */
-    out->count = count;
+    *out = fan_limits;
+    count = out->count;
 
     for (int i = 0; i < count; i++) {
         char key[8];
 
         snprintf(key, sizeof(key), "F%dAc", i);
-        if (smc_read(key, &type, &size, bytes) == 0
-                && decode_number(type, size, bytes, &value) == 0)
-            out->rpm[i] = value;
+        if (smc_read(key, &type, &size, bytes) != 0
+                || decode_number(type, size, bytes, &value) != 0) {
+            memset(out, 0, sizeof(*out));
+            return -1;
+        }
+        out->rpm[i] = value;
 
-        snprintf(key, sizeof(key), "F%dMn", i);
-        if (smc_read(key, &type, &size, bytes) == 0
-                && decode_number(type, size, bytes, &value) == 0)
-            out->min_rpm[i] = value;
-
-        snprintf(key, sizeof(key), "F%dMx", i);
-        if (smc_read(key, &type, &size, bytes) == 0
-                && decode_number(type, size, bytes, &value) == 0)
-            out->max_rpm[i] = value;
     }
     return 0;
 }

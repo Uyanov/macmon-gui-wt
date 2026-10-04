@@ -19,8 +19,8 @@ int  smc_open(void);
 void smc_close(void);
 
 /*
- * 刷新风扇读数。SMC 有应答就返回 0——包括它说"没有风扇"的情况；查询本身
- * 失败才返回 -1，此时 out 会被清零。
+ * 刷新风扇读数。SMC 有效应答就返回 0——包括它说"没有风扇"的情况；缺失 key、
+ * 非零 result/status 或查询失败返回 -1，此时 out 会被清零。
  */
 int  smc_fans(fan_info_t *out);
 

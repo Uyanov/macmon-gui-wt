@@ -28,6 +28,10 @@ typedef struct {
  *
  * 返回写入的条目数，失败返回 -1。
  */
+int proclist_sample_ex(proc_info_t *out, int max, proc_sort_t sort,
+                       int *total_out);
+
+/* 兼容旧调用方；返回写入 out 的条目数。 */
 int proclist_sample(proc_info_t *out, int max, proc_sort_t sort);
 
 #endif

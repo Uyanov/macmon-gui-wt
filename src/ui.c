@@ -4,7 +4,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/ioctl.h>
 #include <time.h>
+#include <unistd.h>
 
 enum {
     PAIR_GOOD = 1,
@@ -116,6 +118,19 @@ int ui_wait(int timeout_ms)
 
     const int ch = getch();
     return ch == ERR ? -1 : ch;
+}
+
+int ui_sync_resize(void)
+{
+    struct winsize ws;
+
+    if (ioctl(STDIN_FILENO, TIOCGWINSZ, &ws) != 0 || ws.ws_row == 0 || ws.ws_col == 0)
+        return 0;
+    if (ws.ws_row == LINES && ws.ws_col == COLS)
+        return 0;
+    resizeterm(ws.ws_row, ws.ws_col);
+    ui_repaint();
+    return 1;
 }
 
 static int color_for(double pct)
@@ -352,6 +367,7 @@ static void draw_procs(int top, int avail, int cols, const proc_info_t *procs,
 void ui_draw(const cpu_usage_t *cpu, const mem_usage_t *mem,
              const disk_usage_t *disk, const double load[3], long uptime,
              const fan_info_t *fans, const proc_info_t *procs, int nprocs,
+             int total_procs,
              const ui_state_t *st)
 {
     int rows, cols, row;
@@ -361,8 +377,16 @@ void ui_draw(const cpu_usage_t *cpu, const mem_usage_t *mem,
     const int fan_rows = (fans != NULL && fans->count > 0) ? fans->count : 0;
 
     getmaxyx(stdscr, rows, cols);
-    if (rows < 1 || cols < 12)
-        return;   /* 什么都放不下，别去动屏幕 */
+    if (rows < 1 || cols < 12) {
+        /* 早退也必须让 ncurses 消化 SIGWINCH，否则放大后会永久冻结。 */
+        resize_term(0, 0);
+        getmaxyx(stdscr, rows, cols);
+        erase();
+        if (rows > 0 && cols > 0)
+            mvaddnstr(rows / 2, 0, "terminal too small", cols);
+        refresh();
+        return;
+    }
 
     /*
      * 再小的话，固定的那几样东西（标题、四条进度条、风扇、历史、负载行、
@@ -455,13 +479,16 @@ void ui_draw(const cpu_usage_t *cpu, const mem_usage_t *mem,
     if (uptime >= 0)
         snprintf(status, sizeof(status),
                  "LOAD %.2f %.2f %.2f   UP %ldd %02ldh %02ldm   TASKS %d",
-                 load[0], load[1], load[2], uptime / 86400,
-                 (uptime % 86400) / 3600, (uptime % 3600) / 60, nprocs);
+             load[0], load[1], load[2], uptime / 86400,
+                 (uptime % 86400) / 3600, (uptime % 3600) / 60, total_procs);
     else
         snprintf(status, sizeof(status), "LOAD %.2f %.2f %.2f   TASKS %d",
-                 load[0], load[1], load[2], nprocs);
+                 load[0], load[1], load[2], total_procs);
+    if (st->stale_mask)
+        strncat(status, "   DATA STALE", sizeof(status) - strlen(status) - 1);
     put(row++, 1, status);
 
     row++;                              /* 空行 */
     draw_procs(row, rows - (row + 2), cols, procs, nprocs);
+    refresh();
 }

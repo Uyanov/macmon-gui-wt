@@ -3,6 +3,7 @@ build/
 macmon
 macmon-sanitize
 MacMonitor.app/
+screens/
 
 # 访达留下的
 .DS_Store

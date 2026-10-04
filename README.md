@@ -28,7 +28,7 @@ make
 ./macmon
 ```
 
-需要 macOS 自带的 Command Line Tools（clang + 系统 ncurses + IOKit），没有第三方依赖。
+需要 macOS 12+ 自带的 Command Line Tools（clang + 系统 ncurses + IOKit），没有第三方依赖。
 
 | 按键 | 作用 |
 | --- | --- |
@@ -45,33 +45,30 @@ make app          # 生成 MacMonitor.app，双击即可运行
 
 包是通用二进制（x86_64 + arm64），用 ad-hoc 签名，本机跑不需要开发者证书。
 
-**为什么包的入口是一个 shell 脚本，而不是 macmon 自己。** macmon 是 ncurses 写的
-TUI，需要真正的 tty；而**从访达双击启动的 .app 是没有终端的**——`newterm()` 会拿到
-NULL，程序只会打印一行错误就退出。所以 `Contents/MacOS/MacMonitor` 是个启动器，它
-通过 `osascript` 让 Terminal.app 去跑包里真正的二进制，然后自己立刻退出，免得 Dock
-里挂着一个什么都不干的图标。
+`Contents/MacOS/MacMonitor` 现在直接承载原生 AppKit 窗口，采样核心在后台线程运行，
+双击应用不需要启动 Terminal.app。TUI 仍可用 `./macmon` 运行；`packaging/launcher.sh`
+仅保留作历史参考，不参与当前打包。
 
-`make app` 还会现场生成图标。这台机器上没有 Pillow，所以 PNG 是纯 Python 手写的
-（zlib + struct），抗锯齿走**有符号距离场**而不是超采样——每像素一次采样，而不是四到
-十六次；不这么做的话纯 Python 渲染 1024px 会慢到不值得每次构建都跑一遍。
+应用不依赖自定义图标资源，系统会使用默认应用图标。
 
 要分享给别人：ad-hoc 签名的应用**没有经过公证**，对方第一次打开会被 Gatekeeper 拦下
 （"无法验证开发者"）。让他右键 → 打开，或者先执行
-`xattr -d com.apple.quarantine MacMonitor.app`。
+`xattr -dr com.apple.quarantine MacMonitor.app`。
 
 ## 代码结构
 
-五个模块，各自只暴露一个窄接口：
+采样核心与两个前端各自只暴露一个窄接口：
 
+- [src/core.c](src/core.c) — 后台采样线程、不可变快照与暂停/排序/间隔控制
 - [src/sysinfo.c](src/sysinfo.c) — 整机 CPU、内存、Swap、磁盘、负载、开机时长
 - [src/proclist.c](src/proclist.c) — 进程快照、CPU 与内存占用、排序
 - [src/smc.c](src/smc.c) — 风扇转速（IOKit 直连 AppleSMC）
-- [src/ui.c](src/ui.c) — ncurses 绘制，不碰任何系统调用
-- [src/main.c](src/main.c) — 采样循环和按键处理
+- [src/ui.c](src/ui.c) — ncurses 绘制与终端尺寸同步
+- [src/main.c](src/main.c) — ncurses TUI 按键处理与快照渲染
+- [src/gui.m](src/gui.m) — AppKit 图形界面
 
-打包相关的三样东西单独放在 [packaging/](packaging/)，不属于程序本身：
-`launcher.sh`（.app 的入口）、`Info.plist`（模板，版本号由 Makefile 注入）、
-`make-icon.py`（现场生成图标）。
+打包相关文件单独放在 [packaging/](packaging/)，不属于程序本身：
+`Info.plist`（模板，版本号由 Makefile 注入）。
 
 ## 几个值得注意的实现细节
 
@@ -96,7 +93,7 @@ NULL，程序只会打印一行错误就退出。所以 `Contents/MacOS/MacMonit
 
 **内存口径对齐活动监视器。** "已用内存" = 应用内存 + 联动内存 + 已压缩内存。应用内存
 取 `internal_page_count - purgeable_count`——可清除的页内核随时能收回，不该算作占用。
-`external_page_count` 是文件缓存，单独显示为可回收部分。
+`external_page_count` 是文件缓存，保存在 `mem.cached`，当前面板不把它计入已用内存。
 
 **进程 CPU 可以超过 100%。** 这是 top 的惯例：数值表示占**单个核心**的百分比，所以一个
 多线程进程跑到 400% 意味着它吃满了 4 个核。
@@ -156,10 +153,9 @@ ESC——如果 ESC 绑定了退出，一滚动程序就没了。这个 bug 在�
 ## 可以继续做的
 
 - 网络吞吐：读 `getifaddrs()` 的接口字节计数做差分，和 CPU 的处理方式一样。
-- 进程采样的开销：单次约 4.4ms，其中几百个 PID 各一次 `proc_pidinfo` 加一次
-  `proc_name`，另外 `cached_cpu_ns()` 对每个 PID 线性扫一遍 `cached[]`，整体是 O(n²)。
-  按 PID 排序后二分、并把进程名缓存起来都能削掉大半。现在不划算：采样每秒才一次，
-  4.4ms 折算下来是 0.44% 的一个核；等哪天采样频率提上去了再回来做这笔账。
+- 进程采样的开销：基线约 4.4ms，其中几百个 PID 各一次 `proc_pidinfo`，进程名现在按
+  PID 缓存；CPU 基线查找仍是 O(n²)，但实测只占约 2–4%，不能宣称能削掉大半。采样每秒
+  一次时约占 0.44% 的一个核。
 - 点击/方向键选择进程、发信号（注意：这是个破坏性操作）。
 - 每核 CPU 占用：`host_processor_info()` 本来就返回每个核的 tick，现在的代码把它们求和了。
 - 磁盘 I/O：`iostat` 那套走 `IOKit`，会比现在这些复杂不少。

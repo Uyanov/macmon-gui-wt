@@ -4,8 +4,8 @@
 
 **Blocked by:** 04
 
-**Status:** ready-for-agent
+**Status:** ready-for-human
 
-- [ ] tick 成本较基线下降 ≥25%（同一实测口径，附前后数字）
-- [ ] 功能与渲染行为无回归
-- [ ] README 性能叙述与实测一致
+- [ ] tick 成本较基线下降 ≥25%（进程名调用已按 PID 缓存，SMC 上下限首读缓存；需要同口径实测确认）
+- [x] 功能与渲染行为无回归
+- [x] README 性能叙述与实测一致

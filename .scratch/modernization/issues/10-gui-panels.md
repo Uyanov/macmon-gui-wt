@@ -4,8 +4,8 @@
 
 **Blocked by:** 09
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] 面板与 TUI 一一对应且数值一致（同一快照）
-- [ ] 60 秒 CPU 走势连续更新
-- [ ] 全中文文案
+- [x] 面板与 TUI 一一对应且数值一致（同一快照）
+- [x] 60 秒 CPU 走势连续更新
+- [x] 全中文文案

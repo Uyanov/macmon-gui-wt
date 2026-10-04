@@ -18,4 +18,4 @@ Build: `make clean && make` — clean, zero warnings with -Wall -Wextra.
 
 ## Gotchas hit while building the driver
 
-(collecting as I go — see skill SKILL.md for the final list)
+(collecting as I go — see `.claude/skills/run-macmon/SKILL.md` for the final list)

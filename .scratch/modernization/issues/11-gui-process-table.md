@@ -4,7 +4,7 @@
 
 **Blocked by:** 09
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] 列头点击切换排序，语义与 TUI 一致
-- [ ] 无任何写操作入口
+- [x] 列头点击切换排序，语义与 TUI 一致
+- [x] 无任何写操作入口

@@ -4,9 +4,13 @@
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] 审计场景的字节流重放不再出现行序错乱/数值异常类假阳性
-- [ ] 既有驱动功能不回退（launch/ss/key/wait/expect/reject/size/rate/quit 等命令照常工作）
-- [ ] CJK 宽度处理正确（中文界面元素不引起布局误判）
-- [ ] 不引入新的运行时依赖（标准库范围内）
+- [x] 审计场景的字节流重放不再出现行序错乱/数值异常类假阳性
+- [x] 既有驱动功能不回退（launch/ss/key/wait/expect/reject/size/rate/quit 等命令照常工作）
+- [x] CJK 宽度处理正确（中文界面元素不引起布局误判）
+- [x] 不引入新的运行时依赖（标准库范围内）
+
+## Comments
+
+- `driver.py` 增加 DECSTBM 区域滚动、备用屏幕 resize 保留和 East Asian 宽字符计数；PTY resize 回归已验证恢复输出。
