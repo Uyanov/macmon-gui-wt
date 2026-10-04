@@ -18,6 +18,7 @@ enum {
 @property(nonatomic) NSTextField *fanStatus;
 @property(nonatomic) NSTextField *history;
 @property(nonatomic) NSTextField *status;
+@property(nonatomic) NSTextField *subtitle;
 @property(nonatomic) NSTableView *table;
 @property(nonatomic) proc_sort_t sort;
 @end
@@ -26,9 +27,31 @@ enum {
 
 - (NSTextField *)label:(NSString *)text size:(CGFloat)size {
     NSTextField *label = [NSTextField labelWithString:text];
-    label.font = [NSFont monospacedSystemFontOfSize:size weight:NSFontWeightRegular];
+    label.font = [NSFont systemFontOfSize:size weight:NSFontWeightRegular];
     label.lineBreakMode = NSLineBreakByTruncatingTail;
     return label;
+}
+
+- (NSTextField *)valueLabel:(NSString *)text size:(CGFloat)size {
+    NSTextField *label = [NSTextField labelWithString:text];
+    label.font = [NSFont monospacedSystemFontOfSize:size weight:NSFontWeightRegular];
+    label.textColor = [NSColor secondaryLabelColor];
+    label.lineBreakMode = NSLineBreakByTruncatingTail;
+    return label;
+}
+
+- (NSTextField *)sectionLabel:(NSString *)text {
+    NSTextField *label = [self label:text size:11];
+    label.font = [NSFont systemFontOfSize:11 weight:NSFontWeightSemibold];
+    label.textColor = [NSColor secondaryLabelColor];
+    return label;
+}
+
+- (NSBox *)separator {
+    NSBox *separator = [[NSBox alloc] initWithFrame:NSZeroRect];
+    separator.boxType = NSBoxSeparator;
+    separator.translatesAutoresizingMaskIntoConstraints = NO;
+    return separator;
 }
 
 - (NSStackView *)metricRow:(NSString *)title {
@@ -39,6 +62,8 @@ enum {
     row.translatesAutoresizingMaskIntoConstraints = NO;
 
     NSTextField *titleLabel = [self label:title size:13];
+    titleLabel.font = [NSFont systemFontOfSize:13 weight:NSFontWeightMedium];
+    titleLabel.textColor = [NSColor labelColor];
     titleLabel.alignment = NSTextAlignmentRight;
     titleLabel.lineBreakMode = NSLineBreakByTruncatingTail;
     [titleLabel.widthAnchor constraintEqualToConstant:76].active = YES;
@@ -49,6 +74,7 @@ enum {
     progress.minValue = 0.0;
     progress.maxValue = 100.0;
     progress.controlSize = NSControlSizeSmall;
+    progress.controlTint = NSBlueControlTint;
     progress.translatesAutoresizingMaskIntoConstraints = NO;
     [progress.widthAnchor constraintGreaterThanOrEqualToConstant:110].active = YES;
     [progress setContentHuggingPriority:NSLayoutPriorityDefaultLow
@@ -56,7 +82,7 @@ enum {
     [progress setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
                                                forOrientation:NSLayoutConstraintOrientationHorizontal];
 
-    NSTextField *value = [self label:@"不可用" size:12];
+    NSTextField *value = [self valueLabel:@"不可用" size:12];
     value.alignment = NSTextAlignmentLeft;
     value.lineBreakMode = NSLineBreakByTruncatingTail;
     value.maximumNumberOfLines = 1;
@@ -70,6 +96,7 @@ enum {
     [row addArrangedSubview:value];
     [self.progressIndicators addObject:progress];
     [self.metricValues addObject:value];
+    [row.heightAnchor constraintEqualToConstant:28].active = YES;
     return row;
 }
 
@@ -97,8 +124,8 @@ enum {
     NSStackView *root = [NSStackView stackViewWithViews:@[]];
     root.orientation = NSUserInterfaceLayoutOrientationVertical;
     root.alignment = NSLayoutAttributeWidth;
-    root.spacing = 10;
-    root.edgeInsets = NSEdgeInsetsMake(18, 18, 18, 18);
+    root.spacing = 12;
+    root.edgeInsets = NSEdgeInsetsMake(22, 24, 20, 24);
     root.translatesAutoresizingMaskIntoConstraints = NO;
     [window.contentView addSubview:root];
     [NSLayoutConstraint activateConstraints:@[
@@ -108,28 +135,43 @@ enum {
         [root.bottomAnchor constraintEqualToAnchor:window.contentView.bottomAnchor]
     ]];
 
+    NSStackView *header = [NSStackView stackViewWithViews:@[]];
+    header.orientation = NSUserInterfaceLayoutOrientationVertical;
+    header.alignment = NSLayoutAttributeLeading;
+    header.spacing = 3;
+    NSTextField *title = [self label:@"MacMonitor" size:24];
+    title.font = [NSFont systemFontOfSize:24 weight:NSFontWeightSemibold];
+    [header addArrangedSubview:title];
+    self.subtitle = [self label:@"实时系统状态 · 每 1 秒更新" size:12];
+    self.subtitle.textColor = [NSColor secondaryLabelColor];
+    [header addArrangedSubview:self.subtitle];
+    [root addArrangedSubview:header];
+
+    [root addArrangedSubview:[self separator]];
+    [root addArrangedSubview:[self sectionLabel:@"系统资源"]];
+
     self.progressIndicators = [NSMutableArray arrayWithCapacity:METRIC_COUNT];
     self.metricValues = [NSMutableArray arrayWithCapacity:METRIC_COUNT];
-    NSStackView *metrics = [NSStackView stackViewWithViews:@[]];
-    metrics.orientation = NSUserInterfaceLayoutOrientationVertical;
-    metrics.alignment = NSLayoutAttributeWidth;
-    metrics.spacing = 6;
-    [metrics addArrangedSubview:[self metricRow:@"CPU"]];
-    [metrics addArrangedSubview:[self metricRow:@"内存"]];
-    [metrics addArrangedSubview:[self metricRow:@"交换空间"]];
-    [metrics addArrangedSubview:[self metricRow:@"磁盘"]];
+    NSGridView *metrics = [[NSGridView alloc] initWithFrame:NSZeroRect];
+    metrics.rowSpacing = 8;
+    metrics.columnSpacing = 28;
+    [metrics addRowWithViews:@[[self metricRow:@"CPU"], [self metricRow:@"内存"]]];
+    [metrics addRowWithViews:@[[self metricRow:@"交换空间"], [self metricRow:@"磁盘"]]];
+    metrics.translatesAutoresizingMaskIntoConstraints = NO;
     [root addArrangedSubview:metrics];
 
-    self.fanStatus = [self label:@"风扇：不可用" size:12];
+    [root addArrangedSubview:[self separator]];
+    [root addArrangedSubview:[self sectionLabel:@"状态"]];
+    self.fanStatus = [self valueLabel:@"风扇：不可用" size:12];
     self.fanStatus.lineBreakMode = NSLineBreakByWordWrapping;
     self.fanStatus.maximumNumberOfLines = 0;
     [root addArrangedSubview:self.fanStatus];
 
-    self.history = [self label:@"CPU 走势（60 秒）：暂无数据" size:12];
+    self.history = [self valueLabel:@"CPU 走势（60 秒）：暂无数据" size:12];
     self.history.lineBreakMode = NSLineBreakByTruncatingTail;
     [root addArrangedSubview:self.history];
 
-    self.status = [self label:@"正在采样…" size:12];
+    self.status = [self valueLabel:@"正在采样…" size:12];
     self.status.lineBreakMode = NSLineBreakByTruncatingTail;
     [root addArrangedSubview:self.status];
 
@@ -137,8 +179,12 @@ enum {
     self.table.dataSource = self;
     self.table.delegate = self;
     self.table.usesAlternatingRowBackgroundColors = YES;
-    for (NSArray *spec in @[@[@"pid", @"PID", @70], @[@"name", @"进程", @300],
-                             @[@"cpu", @"CPU%", @90], @[@"mem", @"内存", @100]]) {
+    self.table.gridStyleMask = NSTableViewSolidHorizontalGridLineMask;
+    self.table.rowHeight = 25;
+    self.table.intercellSpacing = NSMakeSize(12, 0);
+    self.table.columnAutoresizingStyle = NSTableViewLastColumnOnlyAutoresizingStyle;
+    for (NSArray *spec in @[@[@"pid", @"进程号", @70], @[@"name", @"进程", @300],
+                             @[@"cpu", @"CPU 占用", @90], @[@"mem", @"内存", @100]]) {
         NSTableColumn *column = [[NSTableColumn alloc] initWithIdentifier:spec[0]];
         column.title = spec[1];
         column.width = [spec[2] doubleValue];
@@ -242,6 +288,8 @@ enum {
     self.status.stringValue = [NSString stringWithFormat:@"负载 %.2f %.2f %.2f   进程 %d   %@   %@",
         _snapshot.load[0], _snapshot.load[1], _snapshot.load[2], _snapshot.proc_total, up,
         _snapshot.stale_mask ? @"部分数据陈旧" : (_snapshot.paused ? @"已暂停" : @"数据正常")];
+    self.status.textColor = _snapshot.stale_mask
+        ? [NSColor systemOrangeColor] : [NSColor secondaryLabelColor];
     [self.table reloadData];
 }
 
@@ -255,8 +303,7 @@ enum {
     if (!cell) {
         cell = [[NSTableCellView alloc] initWithFrame:NSZeroRect];
         cell.identifier = column.identifier;
-        NSTextField *text = [NSTextField labelWithString:@""];
-        text.font = [NSFont monospacedSystemFontOfSize:12 weight:NSFontWeightRegular];
+        NSTextField *text = [self valueLabel:@"" size:12];
         text.translatesAutoresizingMaskIntoConstraints = NO;
         [cell addSubview:text];
         cell.textField = text;
