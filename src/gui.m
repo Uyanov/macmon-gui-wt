@@ -689,12 +689,20 @@ static NSColor *UISeverityColor(UISeverity severity) {
     chartHeader.distribution = NSStackViewDistributionFill;
     NSTextField *chartTitle = [self label:@"最近 60 秒 CPU 使用率" size:12];
     chartTitle.font = [NSFont systemFontOfSize:12 weight:NSFontWeightMedium];
+    [chartTitle setContentHuggingPriority:NSLayoutPriorityRequired
+                                   forOrientation:NSLayoutConstraintOrientationHorizontal];
     self.chartValue = [self valueLabel:@"暂无数据" size:11];
-    self.chartValue.alignment = NSTextAlignmentRight;
+    self.chartValue.alignment = NSTextAlignmentLeft;
     [self.chartValue setContentHuggingPriority:NSLayoutPriorityRequired
                                   forOrientation:NSLayoutConstraintOrientationHorizontal];
+    NSView *chartSpacer = [[NSView alloc] initWithFrame:NSZeroRect];
+    [chartSpacer setContentHuggingPriority:NSLayoutPriorityDefaultLow
+                                    forOrientation:NSLayoutConstraintOrientationHorizontal];
+    [chartSpacer setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
+                                                   forOrientation:NSLayoutConstraintOrientationHorizontal];
     [chartHeader addArrangedSubview:chartTitle];
     [chartHeader addArrangedSubview:self.chartValue];
+    [chartHeader addArrangedSubview:chartSpacer];
     [chartContent addArrangedSubview:chartHeader];
     self.sparkline = [[SparklineView alloc] initWithFrame:NSZeroRect];
     [self.sparkline.heightAnchor constraintEqualToConstant:58].active = YES;
@@ -745,8 +753,7 @@ static NSColor *UISeverityColor(UISeverity severity) {
         column.width = [spec[2] doubleValue];
         column.headerCell.font = [NSFont systemFontOfSize:11 weight:NSFontWeightSemibold];
         column.headerCell.textColor = [NSColor secondaryLabelColor];
-        column.headerCell.alignment = [column.identifier isEqualToString:@"name"]
-            ? NSTextAlignmentLeft : NSTextAlignmentRight;
+        column.headerCell.alignment = NSTextAlignmentLeft;
         [self.table addTableColumn:column];
     }
 
@@ -767,7 +774,7 @@ static NSColor *UISeverityColor(UISeverity severity) {
         [tableScroll.bottomAnchor constraintEqualToAnchor:tableWrapper.bottomAnchor]
     ]];
     self.emptyState = [self label:@"暂无进程数据" size:13];
-    self.emptyState.alignment = NSTextAlignmentCenter;
+    self.emptyState.alignment = NSTextAlignmentLeft;
     self.emptyState.textColor = [NSColor secondaryLabelColor];
     self.emptyState.translatesAutoresizingMaskIntoConstraints = NO;
     [tableWrapper addSubview:self.emptyState];
@@ -935,7 +942,7 @@ static NSColor *UISeverityColor(UISeverity severity) {
     cell.textField.font = nameColumn
         ? [NSFont systemFontOfSize:12 weight:NSFontWeightRegular]
         : [NSFont monospacedSystemFontOfSize:12 weight:NSFontWeightRegular];
-    cell.textField.alignment = nameColumn ? NSTextAlignmentLeft : NSTextAlignmentRight;
+    cell.textField.alignment = NSTextAlignmentLeft;
     cell.textField.textColor = [NSColor labelColor];
     if ([column.identifier isEqualToString:@"pid"])
         cell.textField.stringValue = [NSString stringWithFormat:@"%d", p.pid];
