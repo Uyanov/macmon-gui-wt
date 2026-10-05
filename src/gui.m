@@ -642,7 +642,7 @@ static NSColor *UISeverityColor(UISeverity severity) {
     for (NSString *titleText in @[@"CPU", @"内存", @"交换空间", @"磁盘"])
         [self.metricCards addObject:[[MetricCardView alloc] initWithTitle:titleText]];
     AdaptiveGridView *metrics = [[AdaptiveGridView alloc]
-        initWithItems:self.metricCards wideColumns:2 compactColumns:1 compactThreshold:760
+        initWithItems:self.metricCards wideColumns:2 compactColumns:2 compactThreshold:760
         itemHeight:104 spacing:10 columnSpacing:12];
     [root addArrangedSubview:metrics];
 
