@@ -205,14 +205,23 @@ static NSColor *UISeverityColor(UISeverity severity) {
         _titleLabel = [NSTextField labelWithString:title];
         _titleLabel.font = [NSFont systemFontOfSize:11 weight:NSFontWeightSemibold];
         _titleLabel.textColor = [NSColor secondaryLabelColor];
+        [_titleLabel setContentHuggingPriority:NSLayoutPriorityRequired
+                                        forOrientation:NSLayoutConstraintOrientationHorizontal];
 
         _stateLabel = [NSTextField labelWithString:@"正常"];
         _stateLabel.font = [NSFont systemFontOfSize:11 weight:NSFontWeightMedium];
-        _stateLabel.alignment = NSTextAlignmentRight;
+        _stateLabel.alignment = NSTextAlignmentLeft;
         [_stateLabel setContentHuggingPriority:NSLayoutPriorityRequired
                                         forOrientation:NSLayoutConstraintOrientationHorizontal];
 
-        NSStackView *titleRow = [NSStackView stackViewWithViews:@[_titleLabel, _stateLabel]];
+        NSView *titleSpacer = [[NSView alloc] initWithFrame:NSZeroRect];
+        [titleSpacer setContentHuggingPriority:NSLayoutPriorityDefaultLow
+                                        forOrientation:NSLayoutConstraintOrientationHorizontal];
+        [titleSpacer setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
+                                                       forOrientation:NSLayoutConstraintOrientationHorizontal];
+        NSStackView *titleRow = [NSStackView stackViewWithViews:@[
+            _titleLabel, _stateLabel, titleSpacer
+        ]];
         titleRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
         titleRow.alignment = NSLayoutAttributeCenterY;
         titleRow.distribution = NSStackViewDistributionFill;
@@ -701,12 +710,20 @@ static NSColor *UISeverityColor(UISeverity severity) {
     processHeader.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     processHeader.alignment = NSLayoutAttributeCenterY;
     NSTextField *processTitle = [self sectionLabel:@"进程列表"];
+    [processTitle setContentHuggingPriority:NSLayoutPriorityRequired
+                                     forOrientation:NSLayoutConstraintOrientationHorizontal];
     self.processSectionHint = [self valueLabel:@"按 CPU 占用排序" size:10];
-    self.processSectionHint.alignment = NSTextAlignmentRight;
+    self.processSectionHint.alignment = NSTextAlignmentLeft;
     [self.processSectionHint setContentHuggingPriority:NSLayoutPriorityRequired
                                                 forOrientation:NSLayoutConstraintOrientationHorizontal];
+    NSView *processSpacer = [[NSView alloc] initWithFrame:NSZeroRect];
+    [processSpacer setContentHuggingPriority:NSLayoutPriorityDefaultLow
+                                      forOrientation:NSLayoutConstraintOrientationHorizontal];
+    [processSpacer setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
+                                                    forOrientation:NSLayoutConstraintOrientationHorizontal];
     [processHeader addArrangedSubview:processTitle];
     [processHeader addArrangedSubview:self.processSectionHint];
+    [processHeader addArrangedSubview:processSpacer];
     [root addArrangedSubview:processHeader];
 
     self.table = [[NSTableView alloc] initWithFrame:NSZeroRect];
