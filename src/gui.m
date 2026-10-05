@@ -1,5 +1,6 @@
 #import <Cocoa/Cocoa.h>
 #include "core.h"
+#include <math.h>
 
 enum {
     METRIC_CPU = 0,
@@ -26,7 +27,7 @@ static NSColor *UISeverityColor(UISeverity severity) {
         return [NSColor secondaryLabelColor];
     case UISeverityNormal:
     default:
-        return [NSColor systemGreenColor];
+        return [NSColor colorWithSRGBRed:0.20 green:0.64 blue:0.40 alpha:1];
     }
 }
 
@@ -46,22 +47,29 @@ static NSColor *UISeverityColor(UISeverity severity) {
         self.wantsLayer = YES;
         _fillColor = [NSColor controlBackgroundColor];
         _borderColor = [NSColor separatorColor];
-        _cornerRadius = 10.0;
-        _borderWidth = 0.75;
+        _cornerRadius = 8.0;
+        _borderWidth = 0.5;
     }
     return self;
 }
 
-- (BOOL)wantsUpdateLayer {
-    return YES;
-}
-
-- (void)updateLayer {
-    self.layer.backgroundColor = self.fillColor.CGColor;
-    self.layer.borderColor = self.borderColor.CGColor;
-    self.layer.borderWidth = self.borderWidth;
+- (void)drawRect:(NSRect)dirtyRect {
+    (void)dirtyRect;
     self.layer.cornerRadius = self.cornerRadius;
     self.layer.masksToBounds = YES;
+    NSBezierPath *panel = [NSBezierPath bezierPathWithRoundedRect:
+        NSInsetRect(self.bounds, self.borderWidth / 2, self.borderWidth / 2)
+        xRadius:self.cornerRadius yRadius:self.cornerRadius];
+    [self.fillColor setFill];
+    [panel fill];
+    [self.borderColor setStroke];
+    panel.lineWidth = self.borderWidth;
+    [panel stroke];
+}
+
+- (void)viewDidChangeEffectiveAppearance {
+    [super viewDidChangeEffectiveAppearance];
+    self.needsDisplay = YES;
 }
 
 - (void)setFillColor:(NSColor *)fillColor {
@@ -74,6 +82,17 @@ static NSColor *UISeverityColor(UISeverity severity) {
     [self setNeedsDisplay:YES];
 }
 
+@end
+
+@interface MonitorDocumentView : NSView
+@end
+
+@implementation MonitorDocumentView
+- (BOOL)isFlipped { return YES; }
+- (void)drawRect:(NSRect)dirtyRect {
+    [NSColor.windowBackgroundColor setFill];
+    NSRectFill(dirtyRect);
+}
 @end
 
 @interface AdaptiveGridView : NSView
@@ -129,6 +148,7 @@ static NSColor *UISeverityColor(UISeverity severity) {
             [_stack.topAnchor constraintEqualToAnchor:self.topAnchor],
             [_stack.bottomAnchor constraintEqualToAnchor:self.bottomAnchor]
         ]];
+        [self rebuildRows:_wideColumns];
     }
     return self;
 }
@@ -159,12 +179,16 @@ static NSColor *UISeverityColor(UISeverity severity) {
         row.distribution = NSStackViewDistributionFillEqually;
         row.spacing = _columnSpacing;
         row.translatesAutoresizingMaskIntoConstraints = NO;
+        [_stack addArrangedSubview:row];
         [row.heightAnchor constraintEqualToConstant:_itemHeight].active = YES;
+        [row.widthAnchor constraintEqualToAnchor:self.widthAnchor].active = YES;
         for (NSInteger index = start; index < start + columns && index < (NSInteger)_items.count;
              index++) {
             [row addArrangedSubview:_items[index]];
+            [_items[index].heightAnchor constraintEqualToAnchor:row.heightAnchor].active = YES;
+            if (index > start)
+                [_items[index].widthAnchor constraintEqualToAnchor:_items[start].widthAnchor].active = YES;
         }
-        [_stack addArrangedSubview:row];
     }
     [self invalidateIntrinsicContentSize];
 }
@@ -178,83 +202,358 @@ static NSColor *UISeverityColor(UISeverity severity) {
 
 @end
 
+typedef NS_ENUM(NSInteger, CardIconKind) {
+    CardIconCPU = 0,
+    CardIconMemory,
+    CardIconSwap,
+    CardIconDisk,
+    CardIconLoad,
+    CardIconProcesses,
+    CardIconUptime,
+    CardIconFan,
+};
+
+/* 资源颜色用于识别指标，橙色和红色仍用于提示异常。 */
+static NSColor *CardAccentColor(CardIconKind kind) {
+    switch (kind) {
+    case CardIconCPU: return NSColor.systemBlueColor;
+    case CardIconMemory: return NSColor.systemTealColor;
+    case CardIconSwap: return NSColor.systemPurpleColor;
+    case CardIconDisk: return NSColor.systemIndigoColor;
+    case CardIconLoad: return NSColor.systemBlueColor;
+    case CardIconProcesses: return NSColor.systemTealColor;
+    case CardIconUptime: return NSColor.systemIndigoColor;
+    case CardIconFan: return NSColor.systemPurpleColor;
+    }
+    return NSColor.controlAccentColor;
+}
+
+@interface ResourceMeterView : NSView
+@property(nonatomic) double doubleValue;
+@property(nonatomic) NSColor *color;
+@end
+
+@implementation ResourceMeterView
+- (void)setDoubleValue:(double)value {
+    _doubleValue = value;
+    self.needsDisplay = YES;
+}
+- (void)setColor:(NSColor *)color {
+    _color = color;
+    self.needsDisplay = YES;
+}
+- (void)drawRect:(NSRect)dirtyRect {
+    (void)dirtyRect;
+    NSColor *color = self.color ?: NSColor.controlAccentColor;
+    [[color colorWithAlphaComponent:0.12] setFill];
+    [[NSBezierPath bezierPathWithRoundedRect:self.bounds xRadius:3 yRadius:3] fill];
+    NSRect fill = self.bounds;
+    fill.size.width *= MIN(100.0, MAX(0.0, self.doubleValue)) / 100.0;
+    if (fill.size.width > 0) {
+        [color setFill];
+        [[NSBezierPath bezierPathWithRoundedRect:fill xRadius:3 yRadius:3] fill];
+    }
+}
+@end
+
+@interface CardIconView : NSImageView
+- (instancetype)initWithKind:(CardIconKind)kind;
+- (void)setKind:(CardIconKind)kind severity:(UISeverity)severity;
+@end
+
+@implementation CardIconView
+
+- (instancetype)initWithKind:(CardIconKind)kind {
+    self = [super initWithFrame:NSZeroRect];
+    if (self) {
+        self.translatesAutoresizingMaskIntoConstraints = NO;
+        self.imageScaling = NSImageScaleProportionallyDown;
+        self.accessibilityRole = NSAccessibilityImageRole;
+        [self.widthAnchor constraintEqualToConstant:20].active = YES;
+        [self.heightAnchor constraintEqualToConstant:20].active = YES;
+        [self setKind:kind severity:UISeverityNormal];
+    }
+    return self;
+}
+
+- (void)setKind:(CardIconKind)kind severity:(UISeverity)severity {
+    NSArray<NSString *> *symbols = @[@"cpu", @"memorychip", @"arrow.left.arrow.right",
+        @"internaldrive", @"waveform.path", @"list.bullet.rectangle", @"clock", @"fanblades"];
+    NSArray<NSString *> *labels = @[@"CPU", @"内存", @"交换空间", @"磁盘",
+        @"系统负载", @"进程数量", @"运行时间", @"风扇转速"];
+    NSImage *image = [NSImage imageWithSystemSymbolName:symbols[kind]
+                              accessibilityDescription:labels[kind]];
+    self.image = [image imageWithSymbolConfiguration:
+        [NSImageSymbolConfiguration configurationWithPointSize:18 weight:NSFontWeightMedium]];
+    self.contentTintColor = severity == UISeverityNormal ? CardAccentColor(kind)
+                                                         : UISeverityColor(severity);
+    self.accessibilityLabel = labels[kind];
+    self.toolTip = labels[kind];
+}
+
+@end
+
+@interface SparklineView : NSView
+@property(nonatomic, copy) NSArray<NSArray<NSNumber *> *> *series;
+@property(nonatomic) NSColor *strokeColor;
+@property(nonatomic, copy) NSArray<NSColor *> *strokeColors;
+@property(nonatomic) double minimumValue;
+@property(nonatomic) double maximumValue;
+@property(nonatomic, copy) NSString *emptyText;
+@property(nonatomic) BOOL durationStyle;
+- (void)setValues:(NSArray<NSNumber *> *)values
+          minimum:(double)minimum
+          maximum:(double)maximum
+        emptyText:(NSString *)emptyText;
+- (void)setSeries:(NSArray<NSArray<NSNumber *> *> *)series
+          minimum:(double)minimum
+          maximum:(double)maximum
+        emptyText:(NSString *)emptyText;
+@end
+
+@implementation SparklineView
+
+- (instancetype)initWithFrame:(NSRect)frame {
+    self = [super initWithFrame:frame];
+    if (self) {
+        self.translatesAutoresizingMaskIntoConstraints = NO;
+        _series = @[];
+        _strokeColor = [NSColor systemBlueColor];
+        _strokeColors = @[];
+        _minimumValue = 0.0;
+        _maximumValue = 100.0;
+        _emptyText = @"暂无历史";
+        self.accessibilityRole = NSAccessibilityImageRole;
+        self.accessibilityLabel = @"卡片趋势图";
+    }
+    return self;
+}
+
+- (void)setValues:(NSArray<NSNumber *> *)values
+          minimum:(double)minimum
+          maximum:(double)maximum
+        emptyText:(NSString *)emptyText {
+    [self setSeries:values.count > 0 ? @[values] : @[] minimum:minimum maximum:maximum
+          emptyText:emptyText];
+}
+
+- (void)setSeries:(NSArray<NSArray<NSNumber *> *> *)series
+          minimum:(double)minimum
+          maximum:(double)maximum
+        emptyText:(NSString *)emptyText {
+    _series = [series copy] ?: @[];
+    _minimumValue = minimum;
+    _maximumValue = maximum;
+    _emptyText = [emptyText copy] ?: @"暂无历史";
+    [self setNeedsDisplay:YES];
+}
+
+- (void)setStrokeColor:(NSColor *)strokeColor {
+    _strokeColor = strokeColor ?: [NSColor systemBlueColor];
+    [self setNeedsDisplay:YES];
+}
+
+- (void)setStrokeColors:(NSArray<NSColor *> *)strokeColors {
+    _strokeColors = [strokeColors copy] ?: @[];
+    [self setNeedsDisplay:YES];
+}
+
+- (void)drawDurationStyleInBounds:(NSRect)bounds {
+    NSColor *color = self.strokeColor;
+    [color setStroke];
+    NSBezierPath *line = [NSBezierPath bezierPath];
+    line.lineWidth = 1.4;
+    [line moveToPoint:NSMakePoint(NSMinX(bounds), NSMidY(bounds))];
+    [line lineToPoint:NSMakePoint(NSMaxX(bounds), NSMidY(bounds))];
+    [line stroke];
+    for (NSInteger i = 0; i < 5; i++) {
+        CGFloat x = NSMinX(bounds) + (NSWidth(bounds) * i / 4.0);
+        NSBezierPath *tick = [NSBezierPath bezierPath];
+        [tick moveToPoint:NSMakePoint(x, NSMidY(bounds) - 4)];
+        [tick lineToPoint:NSMakePoint(x, NSMidY(bounds) + 4)];
+        tick.lineWidth = i == 4 ? 2.0 : 1.0;
+        [tick stroke];
+    }
+}
+
+- (void)drawRect:(NSRect)dirtyRect {
+    (void)dirtyRect;
+    NSRect bounds = NSInsetRect(self.bounds, 3, 3);
+    if (self.durationStyle) {
+        [self drawDurationStyleInBounds:bounds];
+        return;
+    }
+
+    [[NSColor.separatorColor colorWithAlphaComponent:0.35] setStroke];
+    NSBezierPath *baseline = [NSBezierPath bezierPath];
+    [baseline moveToPoint:NSMakePoint(NSMinX(bounds), NSMinY(bounds))];
+    [baseline lineToPoint:NSMakePoint(NSMaxX(bounds), NSMinY(bounds))];
+    baseline.lineWidth = 1.0;
+    [baseline stroke];
+
+    if (self.series.count == 0) {
+        NSDictionary *attributes = @{
+            NSFontAttributeName: [NSFont systemFontOfSize:9],
+            NSForegroundColorAttributeName: [NSColor tertiaryLabelColor]
+        };
+        [self.emptyText drawAtPoint:NSMakePoint(NSMinX(bounds), NSMinY(bounds) + 1)
+                      withAttributes:attributes];
+        return;
+    }
+
+    double minimum = self.minimumValue;
+    double maximum = self.maximumValue;
+    if (!isfinite(minimum)) minimum = 0.0;
+    if (!isfinite(maximum) || maximum <= minimum) {
+        maximum = minimum + 1.0;
+        for (NSArray<NSNumber *> *values in self.series) {
+            for (NSNumber *number in values) {
+                if (isfinite(number.doubleValue))
+                    maximum = MAX(maximum, number.doubleValue);
+            }
+        }
+        if (maximum <= minimum)
+            maximum = minimum + 1.0;
+    }
+
+    CGFloat width = NSWidth(bounds);
+    CGFloat height = NSHeight(bounds);
+    for (NSUInteger seriesIndex = 0; seriesIndex < self.series.count; seriesIndex++) {
+        NSArray<NSNumber *> *values = self.series[seriesIndex];
+        if (values.count == 0)
+            continue;
+        NSColor *color = seriesIndex < self.strokeColors.count
+            ? self.strokeColors[seriesIndex] : self.strokeColor;
+        NSBezierPath *line = [NSBezierPath bezierPath];
+        line.lineWidth = self.series.count > 1 ? 1.5 : 2.0;
+        line.lineJoinStyle = NSLineJoinStyleRound;
+        line.lineCapStyle = NSLineCapStyleRound;
+        NSPoint firstPoint = NSZeroPoint;
+        NSPoint lastPoint = NSZeroPoint;
+        BOOL hasPoint = NO;
+        for (NSUInteger i = 0; i < values.count; i++) {
+            double raw = values[i].doubleValue;
+            if (!isfinite(raw))
+                continue;
+            double normalized = (raw - minimum) / (maximum - minimum);
+            normalized = MIN(1.0, MAX(0.0, normalized));
+            CGFloat x = NSMinX(bounds) + (values.count == 1 ? width / 2.0
+                                                   : width * i / (values.count - 1));
+            CGFloat y = NSMinY(bounds) + height * normalized;
+            NSPoint point = NSMakePoint(x, y);
+            if (!hasPoint) {
+                firstPoint = point;
+                [line moveToPoint:point];
+            } else
+                [line lineToPoint:point];
+            lastPoint = point;
+            hasPoint = YES;
+        }
+        if (!hasPoint)
+            continue;
+        if (self.series.count == 1 && values.count > 1) {
+            NSBezierPath *area = [line copy];
+            [area lineToPoint:NSMakePoint(lastPoint.x, NSMinY(bounds))];
+            [area lineToPoint:NSMakePoint(firstPoint.x, NSMinY(bounds))];
+            [area closePath];
+            NSGradient *gradient = [[NSGradient alloc]
+                initWithStartingColor:[color colorWithAlphaComponent:0.02]
+                          endingColor:[color colorWithAlphaComponent:0.20]];
+            [gradient drawInBezierPath:area angle:90];
+        }
+        [color setStroke];
+        [line stroke];
+        NSRect marker = NSMakeRect(lastPoint.x - 2, lastPoint.y - 2, 4, 4);
+        [color setFill];
+        [[NSBezierPath bezierPathWithOvalInRect:marker] fill];
+    }
+}
+
+@end
+
 @interface MetricCardView : RoundedPanelView
 @property(nonatomic, readonly) NSString *metricTitle;
-- (instancetype)initWithTitle:(NSString *)title;
+- (instancetype)initWithTitle:(NSString *)title kind:(CardIconKind)kind;
 - (void)setPercent:(double)percent
              value:(NSString *)value
             detail:(NSString *)detail
              state:(NSString *)state
           severity:(UISeverity)severity;
+- (void)setChartValues:(NSArray<NSNumber *> *)values
+                minimum:(double)minimum
+                maximum:(double)maximum
+              emptyText:(NSString *)emptyText;
 @end
 
 @implementation MetricCardView {
+    CardIconKind _kind;
+    CardIconView *_icon;
+    SparklineView *_sparkline;
     NSTextField *_titleLabel;
     NSTextField *_stateLabel;
     NSTextField *_valueLabel;
     NSTextField *_detailLabel;
-    NSProgressIndicator *_progress;
+    ResourceMeterView *_progress;
 }
 
-- (instancetype)initWithTitle:(NSString *)title {
+- (instancetype)initWithTitle:(NSString *)title kind:(CardIconKind)kind {
     self = [super initWithFrame:NSZeroRect];
     if (self) {
         _metricTitle = [title copy];
+        _kind = kind;
         self.accessibilityRole = NSAccessibilityGroupRole;
 
+        _icon = [[CardIconView alloc] initWithKind:kind];
         _titleLabel = [NSTextField labelWithString:title];
-        _titleLabel.font = [NSFont systemFontOfSize:11 weight:NSFontWeightSemibold];
+        _titleLabel.font = [NSFont systemFontOfSize:12 weight:NSFontWeightSemibold];
         _titleLabel.textColor = [NSColor secondaryLabelColor];
+        _titleLabel.alignment = NSTextAlignmentLeft;
         [_titleLabel setContentHuggingPriority:NSLayoutPriorityRequired
                                         forOrientation:NSLayoutConstraintOrientationHorizontal];
 
         _stateLabel = [NSTextField labelWithString:@"正常"];
-        _stateLabel.font = [NSFont systemFontOfSize:11 weight:NSFontWeightMedium];
+        _stateLabel.font = [NSFont systemFontOfSize:10 weight:NSFontWeightMedium];
         _stateLabel.alignment = NSTextAlignmentLeft;
         [_stateLabel setContentHuggingPriority:NSLayoutPriorityRequired
                                         forOrientation:NSLayoutConstraintOrientationHorizontal];
-
         NSView *titleSpacer = [[NSView alloc] initWithFrame:NSZeroRect];
         [titleSpacer setContentHuggingPriority:NSLayoutPriorityDefaultLow
                                         forOrientation:NSLayoutConstraintOrientationHorizontal];
         [titleSpacer setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
                                                        forOrientation:NSLayoutConstraintOrientationHorizontal];
-        NSStackView *titleRow = [NSStackView stackViewWithViews:@[
-            _titleLabel, _stateLabel, titleSpacer
-        ]];
+        NSStackView *titleRow = [NSStackView stackViewWithViews:@[_icon, _titleLabel, titleSpacer, _stateLabel]];
         titleRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
         titleRow.alignment = NSLayoutAttributeCenterY;
+        titleRow.spacing = 5;
         titleRow.distribution = NSStackViewDistributionFill;
-        titleRow.translatesAutoresizingMaskIntoConstraints = NO;
 
         _valueLabel = [NSTextField labelWithString:@"不可用"];
-        _valueLabel.font = [NSFont systemFontOfSize:22 weight:NSFontWeightSemibold];
+        _valueLabel.font = [NSFont monospacedDigitSystemFontOfSize:28 weight:NSFontWeightSemibold];
         _valueLabel.textColor = [NSColor labelColor];
+        _valueLabel.alignment = NSTextAlignmentLeft;
         _valueLabel.lineBreakMode = NSLineBreakByTruncatingTail;
 
-        _progress = [[NSProgressIndicator alloc] initWithFrame:NSZeroRect];
-        _progress.style = NSProgressIndicatorStyleBar;
-        _progress.indeterminate = NO;
-        _progress.minValue = 0.0;
-        _progress.maxValue = 100.0;
-        _progress.controlSize = NSControlSizeSmall;
-        _progress.controlTint = NSBlueControlTint;
+        _progress = [[ResourceMeterView alloc] initWithFrame:NSZeroRect];
+        _progress.color = CardAccentColor(kind);
         _progress.translatesAutoresizingMaskIntoConstraints = NO;
-        [_progress.heightAnchor constraintEqualToConstant:7].active = YES;
+        [_progress.heightAnchor constraintEqualToConstant:5].active = YES;
 
+        _sparkline = [[SparklineView alloc] initWithFrame:NSZeroRect];
+        [_sparkline.heightAnchor constraintEqualToConstant:32].active = YES;
         _detailLabel = [NSTextField labelWithString:@"暂无数据"];
-        _detailLabel.font = [NSFont monospacedSystemFontOfSize:11 weight:NSFontWeightRegular];
+        _detailLabel.font = [NSFont systemFontOfSize:10 weight:NSFontWeightRegular];
         _detailLabel.textColor = [NSColor secondaryLabelColor];
+        _detailLabel.alignment = NSTextAlignmentLeft;
         _detailLabel.lineBreakMode = NSLineBreakByTruncatingTail;
         _detailLabel.maximumNumberOfLines = 1;
 
         NSStackView *content = [NSStackView stackViewWithViews:@[
-            titleRow, _valueLabel, _progress, _detailLabel
+            titleRow, _valueLabel, _progress, _sparkline, _detailLabel
         ]];
         content.orientation = NSUserInterfaceLayoutOrientationVertical;
-        content.alignment = NSLayoutAttributeWidth;
-        content.spacing = 5;
-        content.edgeInsets = NSEdgeInsetsMake(11, 13, 10, 13);
+        content.alignment = NSLayoutAttributeLeading;
+        content.spacing = 6;
+        content.edgeInsets = NSEdgeInsetsMake(14, 14, 14, 14);
         content.translatesAutoresizingMaskIntoConstraints = NO;
         [self addSubview:content];
         [NSLayoutConstraint activateConstraints:@[
@@ -262,6 +561,13 @@ static NSColor *UISeverityColor(UISeverity severity) {
             [content.trailingAnchor constraintEqualToAnchor:self.trailingAnchor],
             [content.topAnchor constraintEqualToAnchor:self.topAnchor],
             [content.bottomAnchor constraintEqualToAnchor:self.bottomAnchor]
+        ]];
+        [NSLayoutConstraint activateConstraints:@[
+            [titleRow.widthAnchor constraintEqualToAnchor:content.widthAnchor constant:-28],
+            [_valueLabel.widthAnchor constraintEqualToAnchor:content.widthAnchor constant:-28],
+            [_progress.widthAnchor constraintEqualToAnchor:content.widthAnchor constant:-28],
+            [_sparkline.widthAnchor constraintEqualToAnchor:content.widthAnchor constant:-28],
+            [_detailLabel.widthAnchor constraintEqualToAnchor:content.widthAnchor constant:-28]
         ]];
     }
     return self;
@@ -276,44 +582,82 @@ static NSColor *UISeverityColor(UISeverity severity) {
     _stateLabel.stringValue = state;
     _stateLabel.textColor = color;
     _valueLabel.stringValue = value;
+    _valueLabel.toolTip = value;
     _detailLabel.stringValue = detail;
+    _detailLabel.toolTip = detail;
     _valueLabel.textColor = severity == UISeverityNormal ? [NSColor labelColor] : color;
+    NSColor *accent = severity == UISeverityNormal ? CardAccentColor(_kind) : color;
+    _sparkline.strokeColor = accent;
+    _progress.color = accent;
     _progress.doubleValue = MIN(100.0, MAX(0.0, percent));
-    _progress.hidden = severity != UISeverityNormal;
-    self.borderColor = [color colorWithAlphaComponent:severity == UISeverityNormal ? 0.22 : 0.55];
+    /* 陈旧或缺失的读数不显示占用条；高占用仍应显示完整读数。 */
+    _progress.hidden = ![value hasSuffix:@"%"];
+    [_icon setKind:_kind severity:severity];
+    self.borderColor = severity == UISeverityNormal ? NSColor.separatorColor
+        : [color colorWithAlphaComponent:0.4];
     self.accessibilityLabel = [NSString stringWithFormat:@"%@ %@，%@", _metricTitle, value, state];
+}
+
+- (void)setChartValues:(NSArray<NSNumber *> *)values
+                minimum:(double)minimum
+                maximum:(double)maximum
+              emptyText:(NSString *)emptyText {
+    [_sparkline setValues:values minimum:minimum maximum:maximum emptyText:emptyText];
 }
 
 @end
 
 @interface InfoTileView : RoundedPanelView
-- (instancetype)initWithTitle:(NSString *)title;
+- (instancetype)initWithTitle:(NSString *)title kind:(CardIconKind)kind;
 - (void)setValueText:(NSString *)value severity:(UISeverity)severity;
+- (void)setChartSeries:(NSArray<NSArray<NSNumber *> *> *)series
+               minimum:(double)minimum
+               maximum:(double)maximum
+             emptyText:(NSString *)emptyText;
+- (void)setDurationChart;
 @end
 
 @implementation InfoTileView {
+    CardIconKind _kind;
+    CardIconView *_icon;
+    SparklineView *_sparkline;
     NSTextField *_titleLabel;
     NSTextField *_valueLabel;
 }
 
-- (instancetype)initWithTitle:(NSString *)title {
+- (instancetype)initWithTitle:(NSString *)title kind:(CardIconKind)kind {
     self = [super initWithFrame:NSZeroRect];
     if (self) {
+        _kind = kind;
+        _icon = [[CardIconView alloc] initWithKind:kind];
         _titleLabel = [NSTextField labelWithString:title];
         _titleLabel.font = [NSFont systemFontOfSize:11 weight:NSFontWeightMedium];
         _titleLabel.textColor = [NSColor secondaryLabelColor];
+        _titleLabel.alignment = NSTextAlignmentLeft;
+        NSView *titleSpacer = [[NSView alloc] initWithFrame:NSZeroRect];
+        [titleSpacer setContentHuggingPriority:NSLayoutPriorityDefaultLow
+                                        forOrientation:NSLayoutConstraintOrientationHorizontal];
+        [titleSpacer setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
+                                                       forOrientation:NSLayoutConstraintOrientationHorizontal];
+        NSStackView *titleRow = [NSStackView stackViewWithViews:@[_icon, _titleLabel, titleSpacer]];
+        titleRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+        titleRow.alignment = NSLayoutAttributeCenterY;
+        titleRow.spacing = 4;
 
         _valueLabel = [NSTextField labelWithString:@"暂无数据"];
-        _valueLabel.font = [NSFont monospacedSystemFontOfSize:12 weight:NSFontWeightMedium];
+        _valueLabel.font = [NSFont monospacedDigitSystemFontOfSize:13 weight:NSFontWeightMedium];
         _valueLabel.textColor = [NSColor labelColor];
+        _valueLabel.alignment = NSTextAlignmentLeft;
         _valueLabel.lineBreakMode = NSLineBreakByTruncatingTail;
-        _valueLabel.maximumNumberOfLines = 2;
+        _valueLabel.maximumNumberOfLines = 1;
+        _sparkline = [[SparklineView alloc] initWithFrame:NSZeroRect];
+        [_sparkline.heightAnchor constraintEqualToConstant:22].active = YES;
 
-        NSStackView *content = [NSStackView stackViewWithViews:@[_titleLabel, _valueLabel]];
+        NSStackView *content = [NSStackView stackViewWithViews:@[titleRow, _valueLabel, _sparkline]];
         content.orientation = NSUserInterfaceLayoutOrientationVertical;
-        content.alignment = NSLayoutAttributeWidth;
-        content.spacing = 4;
-        content.edgeInsets = NSEdgeInsetsMake(9, 11, 8, 11);
+        content.alignment = NSLayoutAttributeLeading;
+        content.spacing = 6;
+        content.edgeInsets = NSEdgeInsetsMake(12, 14, 12, 14);
         content.translatesAutoresizingMaskIntoConstraints = NO;
         [self addSubview:content];
         [NSLayoutConstraint activateConstraints:@[
@@ -322,7 +666,12 @@ static NSColor *UISeverityColor(UISeverity severity) {
             [content.topAnchor constraintEqualToAnchor:self.topAnchor],
             [content.bottomAnchor constraintEqualToAnchor:self.bottomAnchor]
         ]];
-        [self.heightAnchor constraintEqualToConstant:62].active = YES;
+        [NSLayoutConstraint activateConstraints:@[
+            [titleRow.widthAnchor constraintEqualToAnchor:content.widthAnchor constant:-28],
+            [_valueLabel.widthAnchor constraintEqualToAnchor:content.widthAnchor constant:-28],
+            [_sparkline.widthAnchor constraintEqualToAnchor:content.widthAnchor constant:-28]
+        ]];
+
     }
     return self;
 }
@@ -330,9 +679,29 @@ static NSColor *UISeverityColor(UISeverity severity) {
 - (void)setValueText:(NSString *)value severity:(UISeverity)severity {
     NSColor *color = UISeverityColor(severity);
     _valueLabel.stringValue = value;
+    _valueLabel.toolTip = value;
     _valueLabel.textColor = severity == UISeverityNormal ? [NSColor labelColor] : color;
-    self.borderColor = [color colorWithAlphaComponent:severity == UISeverityNormal ? 0.2 : 0.5];
+    [_icon setKind:_kind severity:severity];
+    self.borderColor = severity == UISeverityNormal ? NSColor.separatorColor
+        : [color colorWithAlphaComponent:0.4];
+    _sparkline.strokeColor = severity == UISeverityNormal ? CardAccentColor(_kind) : color;
     self.accessibilityValue = value;
+}
+
+- (void)setChartSeries:(NSArray<NSArray<NSNumber *> *> *)series
+               minimum:(double)minimum
+               maximum:(double)maximum
+             emptyText:(NSString *)emptyText {
+    _sparkline.durationStyle = NO;
+    _sparkline.strokeColors = series.count > 1
+        ? @[[NSColor systemBlueColor], [NSColor systemOrangeColor], [NSColor systemPurpleColor]]
+        : @[];
+    [_sparkline setSeries:series minimum:minimum maximum:maximum emptyText:emptyText];
+}
+
+- (void)setDurationChart {
+    _sparkline.durationStyle = YES;
+    [_sparkline setSeries:@[] minimum:0 maximum:1 emptyText:@""];
 }
 
 @end
@@ -359,15 +728,17 @@ static NSColor *UISeverityColor(UISeverity severity) {
         _titleLabel = [NSTextField labelWithString:@"系统状态正常"];
         _titleLabel.font = [NSFont systemFontOfSize:13 weight:NSFontWeightSemibold];
         _titleLabel.textColor = [NSColor labelColor];
+        _titleLabel.alignment = NSTextAlignmentLeft;
 
         _detailLabel = [NSTextField labelWithString:@"正在读取系统状态…"];
         _detailLabel.font = [NSFont systemFontOfSize:11 weight:NSFontWeightRegular];
         _detailLabel.textColor = [NSColor secondaryLabelColor];
+        _detailLabel.alignment = NSTextAlignmentLeft;
         _detailLabel.lineBreakMode = NSLineBreakByTruncatingTail;
 
         NSStackView *text = [NSStackView stackViewWithViews:@[_titleLabel, _detailLabel]];
         text.orientation = NSUserInterfaceLayoutOrientationVertical;
-        text.alignment = NSLayoutAttributeWidth;
+        text.alignment = NSLayoutAttributeLeading;
         text.spacing = 2;
 
         NSStackView *content = [NSStackView stackViewWithViews:@[_dot, text]];
@@ -391,6 +762,7 @@ static NSColor *UISeverityColor(UISeverity severity) {
     NSColor *color = UISeverityColor(severity);
     _titleLabel.stringValue = title;
     _detailLabel.stringValue = detail;
+    _detailLabel.toolTip = detail;
     _dot.layer.backgroundColor = color.CGColor;
     _dot.layer.cornerRadius = 5.0;
     self.fillColor = [color colorWithAlphaComponent:0.08];
@@ -400,83 +772,8 @@ static NSColor *UISeverityColor(UISeverity severity) {
 
 @end
 
-@interface SparklineView : NSView
-@property(nonatomic, copy) NSArray<NSNumber *> *values;
-@property(nonatomic) NSColor *strokeColor;
-@end
-
-@implementation SparklineView
-
-- (instancetype)initWithFrame:(NSRect)frame {
-    self = [super initWithFrame:frame];
-    if (self) {
-        self.translatesAutoresizingMaskIntoConstraints = NO;
-        _values = @[];
-        _strokeColor = [NSColor systemBlueColor];
-        self.accessibilityRole = NSAccessibilityImageRole;
-        self.accessibilityLabel = @"CPU 60 秒走势";
-    }
-    return self;
-}
-
-- (void)setValues:(NSArray<NSNumber *> *)values {
-    _values = [values copy];
-    [self setNeedsDisplay:YES];
-}
-
-- (void)setStrokeColor:(NSColor *)strokeColor {
-    _strokeColor = strokeColor;
-    [self setNeedsDisplay:YES];
-}
-
-- (void)drawRect:(NSRect)dirtyRect {
-    (void)dirtyRect;
-    NSRect bounds = NSInsetRect(self.bounds, 2, 4);
-    [[NSColor.separatorColor colorWithAlphaComponent:0.4] setStroke];
-    NSBezierPath *baseline = [NSBezierPath bezierPath];
-    [baseline moveToPoint:NSMakePoint(NSMinX(bounds), NSMinY(bounds))];
-    [baseline lineToPoint:NSMakePoint(NSMaxX(bounds), NSMinY(bounds))];
-    baseline.lineWidth = 1.0;
-    [baseline stroke];
-
-    if (_values.count == 0)
-        return;
-
-    CGFloat width = NSWidth(bounds);
-    CGFloat height = NSHeight(bounds);
-    NSBezierPath *line = [NSBezierPath bezierPath];
-    NSPoint lastPoint = NSZeroPoint;
-    for (NSUInteger i = 0; i < _values.count; i++) {
-        CGFloat value = MIN(100.0, MAX(0.0, _values[i].doubleValue));
-        CGFloat x = NSMinX(bounds) + (_values.count == 1 ? width / 2.0
-                                                        : width * i / (_values.count - 1));
-        CGFloat y = NSMinY(bounds) + height * value / 100.0;
-        NSPoint point = NSMakePoint(x, y);
-        lastPoint = point;
-        if (i == 0)
-            [line moveToPoint:point];
-        else
-            [line lineToPoint:point];
-    }
-
-    NSBezierPath *fill = [line copy];
-    [fill lineToPoint:NSMakePoint(NSMaxX(bounds), NSMinY(bounds))];
-    [fill lineToPoint:NSMakePoint(NSMinX(bounds), NSMinY(bounds))];
-    [fill closePath];
-    [[_strokeColor colorWithAlphaComponent:0.12] setFill];
-    [fill fill];
-
-    [_strokeColor setStroke];
-    line.lineWidth = 2.0;
-    [line stroke];
-    [[_strokeColor colorWithAlphaComponent:0.8] setFill];
-    NSRect marker = NSMakeRect(lastPoint.x - 3, lastPoint.y - 3, 6, 6);
-    [[NSBezierPath bezierPathWithOvalInRect:marker] fill];
-}
-
-@end
-
 @interface MacMonitorApp : NSObject <NSApplicationDelegate, NSTableViewDataSource, NSTableViewDelegate>
+@property(nonatomic, strong) NSWindow *window;
 @property(nonatomic) monitor_core_t *core;
 @property(nonatomic) core_snapshot_t snapshot;
 @property(nonatomic) NSTimer *timer;
@@ -486,14 +783,20 @@ static NSColor *UISeverityColor(UISeverity severity) {
 @property(nonatomic) InfoTileView *processTile;
 @property(nonatomic) InfoTileView *uptimeTile;
 @property(nonatomic) InfoTileView *fanTile;
-@property(nonatomic) SparklineView *sparkline;
-@property(nonatomic) NSTextField *history;
-@property(nonatomic) NSTextField *chartValue;
 @property(nonatomic) NSTextField *subtitle;
 @property(nonatomic) NSTextField *processSectionHint;
 @property(nonatomic) NSTextField *emptyState;
 @property(nonatomic) NSTableView *table;
 @property(nonatomic) proc_sort_t sort;
+@property(nonatomic) uint64_t lastHistorySequence;
+@property(nonatomic) NSMutableArray<NSNumber *> *memoryHistory;
+@property(nonatomic) NSMutableArray<NSNumber *> *swapHistory;
+@property(nonatomic) NSMutableArray<NSNumber *> *diskHistory;
+@property(nonatomic) NSMutableArray<NSNumber *> *load1History;
+@property(nonatomic) NSMutableArray<NSNumber *> *load5History;
+@property(nonatomic) NSMutableArray<NSNumber *> *load15History;
+@property(nonatomic) NSMutableArray<NSNumber *> *processHistory;
+@property(nonatomic) NSMutableArray<NSNumber *> *fanHistory;
 @end
 
 @implementation MacMonitorApp
@@ -529,6 +832,78 @@ static NSColor *UISeverityColor(UISeverity severity) {
     return separator;
 }
 
+- (UISeverity)severityForAvailable:(BOOL)available
+                              stale:(BOOL)stale
+                            percent:(double)percent {
+    if (stale)
+        return UISeverityWarning;
+    if (!available)
+        return UISeverityError;
+    if (percent >= 85.0)
+        return UISeverityError;
+    if (percent >= 60.0)
+        return UISeverityWarning;
+    return UISeverityNormal;
+}
+
+- (void)appendHistoryValue:(double)value toArray:(NSMutableArray<NSNumber *> *)history {
+    if (!history || !isfinite(value))
+        return;
+    if (history.count >= CORE_CPU_HISTORY)
+        [history removeObjectAtIndex:0];
+    [history addObject:@(value)];
+}
+
+- (NSArray<NSNumber *> *)cpuHistoryValues {
+    NSMutableArray<NSNumber *> *values = [NSMutableArray arrayWithCapacity:_snapshot.history_len];
+    for (int i = 0; i < _snapshot.history_len; i++) {
+        int index = (_snapshot.history_head - _snapshot.history_len + i + CORE_CPU_HISTORY)
+            % CORE_CPU_HISTORY;
+        [values addObject:@(_snapshot.history[index])];
+    }
+    return values;
+}
+
+- (double)fanAverage {
+    if (!_snapshot.has_fans || _snapshot.fans.count <= 0)
+        return NAN;
+    double total = 0.0;
+    int count = MIN(_snapshot.fans.count, SMC_MAX_FANS);
+    for (int i = 0; i < count; i++)
+        total += _snapshot.fans.rpm[i];
+    return count > 0 ? total / count : NAN;
+}
+
+- (void)recordHistoryForSnapshot:(BOOL)cpuAvailable
+                   memoryAvailable:(BOOL)memoryAvailable
+                      swapAvailable:(BOOL)swapAvailable
+                      diskAvailable:(BOOL)diskAvailable
+                     fanAvailable:(BOOL)fanAvailable {
+    if (_snapshot.sequence == 0 || _snapshot.sequence == self.lastHistorySequence)
+        return;
+    self.lastHistorySequence = _snapshot.sequence;
+    if (memoryAvailable) {
+        double used = (double)(_snapshot.mem.app + _snapshot.mem.wired + _snapshot.mem.compressed);
+        [self appendHistoryValue:100.0 * used / _snapshot.mem.total toArray:self.memoryHistory];
+    }
+    if (swapAvailable)
+        [self appendHistoryValue:100.0 * _snapshot.mem.swap_used / _snapshot.mem.swap_total
+                         toArray:self.swapHistory];
+    if (diskAvailable)
+        [self appendHistoryValue:100.0 * _snapshot.disk.used / _snapshot.disk.total
+                         toArray:self.diskHistory];
+    if (!(_snapshot.stale_mask & CORE_STALE_LOAD)) {
+        [self appendHistoryValue:_snapshot.load[0] toArray:self.load1History];
+        [self appendHistoryValue:_snapshot.load[1] toArray:self.load5History];
+        [self appendHistoryValue:_snapshot.load[2] toArray:self.load15History];
+    }
+    if (!(_snapshot.stale_mask & CORE_STALE_PROC))
+        [self appendHistoryValue:_snapshot.proc_total toArray:self.processHistory];
+    if (fanAvailable)
+        [self appendHistoryValue:[self fanAverage] toArray:self.fanHistory];
+    (void)cpuAvailable;
+}
+
 - (NSString *)fanSummary {
     if (_snapshot.stale_mask & CORE_STALE_FAN)
         return @"数据陈旧";
@@ -548,7 +923,7 @@ static NSColor *UISeverityColor(UISeverity severity) {
     if (_snapshot.uptime < 0)
         return @"运行时间不可用";
     long uptime = _snapshot.uptime;
-    return [NSString stringWithFormat:@"%ldd %02ldh %02ldm", uptime / 86400,
+    return [NSString stringWithFormat:@"%ld天 %02ld时 %02ld分", uptime / 86400,
         (uptime % 86400) / 3600, (uptime % 3600) / 60];
 }
 
@@ -583,13 +958,27 @@ static NSColor *UISeverityColor(UISeverity severity) {
         return;
     }
 
-    NSRect frame = NSMakeRect(0, 0, 980, 760);
+    NSRect frame = NSMakeRect(0, 0, 1040, 800);
     NSWindow *window = [[NSWindow alloc] initWithContentRect:frame
         styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable |
                    NSWindowStyleMaskMiniaturizable | NSWindowStyleMaskResizable)
         backing:NSBackingStoreBuffered defer:NO];
+    // ARC owns this window; AppKit must not also release it on close.
+    window.releasedWhenClosed = NO;
+    self.window = window;
     window.title = @"MacMonitor";
-    window.minSize = NSMakeSize(520, 360);
+    window.titlebarAppearsTransparent = YES;
+    window.backgroundColor = NSColor.windowBackgroundColor;
+    window.minSize = NSMakeSize(520, 380);
+
+    self.memoryHistory = [NSMutableArray arrayWithCapacity:CORE_CPU_HISTORY];
+    self.swapHistory = [NSMutableArray arrayWithCapacity:CORE_CPU_HISTORY];
+    self.diskHistory = [NSMutableArray arrayWithCapacity:CORE_CPU_HISTORY];
+    self.load1History = [NSMutableArray arrayWithCapacity:CORE_CPU_HISTORY];
+    self.load5History = [NSMutableArray arrayWithCapacity:CORE_CPU_HISTORY];
+    self.load15History = [NSMutableArray arrayWithCapacity:CORE_CPU_HISTORY];
+    self.processHistory = [NSMutableArray arrayWithCapacity:CORE_CPU_HISTORY];
+    self.fanHistory = [NSMutableArray arrayWithCapacity:CORE_CPU_HISTORY];
 
     NSScrollView *mainScroll = [[NSScrollView alloc] initWithFrame:NSZeroRect];
     mainScroll.hasVerticalScroller = YES;
@@ -606,7 +995,7 @@ static NSColor *UISeverityColor(UISeverity severity) {
         [mainScroll.bottomAnchor constraintEqualToAnchor:window.contentView.bottomAnchor]
     ]];
 
-    NSView *document = [[NSView alloc] initWithFrame:NSZeroRect];
+    NSView *document = [[MonitorDocumentView alloc] initWithFrame:NSZeroRect];
     document.translatesAutoresizingMaskIntoConstraints = NO;
     [mainScroll setDocumentView:document];
     [NSLayoutConstraint activateConstraints:@[
@@ -619,7 +1008,7 @@ static NSColor *UISeverityColor(UISeverity severity) {
     NSStackView *root = [NSStackView stackViewWithViews:@[]];
     root.orientation = NSUserInterfaceLayoutOrientationVertical;
     root.alignment = NSLayoutAttributeWidth;
-    root.spacing = 12;
+    root.spacing = 14;
     root.edgeInsets = NSEdgeInsetsMake(22, 24, 24, 24);
     root.translatesAutoresizingMaskIntoConstraints = NO;
     [document addSubview:root];
@@ -637,7 +1026,7 @@ static NSColor *UISeverityColor(UISeverity severity) {
     NSTextField *title = [self label:@"MacMonitor" size:26];
     title.font = [NSFont systemFontOfSize:26 weight:NSFontWeightSemibold];
     [header addArrangedSubview:title];
-    self.subtitle = [self label:@"实时系统状态 · 实时更新" size:12];
+    self.subtitle = [self label:@"系统概览 · 每秒更新" size:12];
     self.subtitle.textColor = [NSColor secondaryLabelColor];
     [header addArrangedSubview:self.subtitle];
     [root addArrangedSubview:header];
@@ -650,70 +1039,29 @@ static NSColor *UISeverityColor(UISeverity severity) {
 
     [root addArrangedSubview:[self sectionLabel:@"系统资源"]];
     self.metricCards = [NSMutableArray arrayWithCapacity:METRIC_COUNT];
-    for (NSString *titleText in @[@"CPU", @"内存", @"交换空间", @"磁盘"])
-        [self.metricCards addObject:[[MetricCardView alloc] initWithTitle:titleText]];
+    NSArray *metricSpecs = @[
+        @[@"CPU", @(CardIconCPU)], @[@"内存", @(CardIconMemory)],
+        @[@"交换空间", @(CardIconSwap)], @[@"磁盘", @(CardIconDisk)]
+    ];
+    for (NSArray *spec in metricSpecs)
+        [self.metricCards addObject:[[MetricCardView alloc] initWithTitle:spec[0]
+                                                                       kind:[spec[1] integerValue]]];
     AdaptiveGridView *metrics = [[AdaptiveGridView alloc]
-        initWithItems:self.metricCards wideColumns:2 compactColumns:2 compactThreshold:760
-        itemHeight:104 spacing:10 columnSpacing:12];
+        initWithItems:self.metricCards wideColumns:4 compactColumns:2 compactThreshold:900
+        itemHeight:166 spacing:12 columnSpacing:12];
     [root addArrangedSubview:metrics];
 
     [root addArrangedSubview:[self separator]];
     [root addArrangedSubview:[self sectionLabel:@"运行状态"]];
-    self.loadTile = [[InfoTileView alloc] initWithTitle:@"系统负载"];
-    self.processTile = [[InfoTileView alloc] initWithTitle:@"进程数量"];
-    self.uptimeTile = [[InfoTileView alloc] initWithTitle:@"运行时间"];
-    self.fanTile = [[InfoTileView alloc] initWithTitle:@"风扇转速"];
+    self.loadTile = [[InfoTileView alloc] initWithTitle:@"系统负载" kind:CardIconLoad];
+    self.processTile = [[InfoTileView alloc] initWithTitle:@"进程数量" kind:CardIconProcesses];
+    self.uptimeTile = [[InfoTileView alloc] initWithTitle:@"运行时间" kind:CardIconUptime];
+    self.fanTile = [[InfoTileView alloc] initWithTitle:@"风扇转速" kind:CardIconFan];
     AdaptiveGridView *statusTiles = [[AdaptiveGridView alloc]
         initWithItems:@[self.loadTile, self.processTile, self.uptimeTile, self.fanTile]
         wideColumns:4 compactColumns:2 compactThreshold:760
-        itemHeight:62 spacing:10 columnSpacing:10];
+        itemHeight:100 spacing:12 columnSpacing:12];
     [root addArrangedSubview:statusTiles];
-
-    [root addArrangedSubview:[self separator]];
-    [root addArrangedSubview:[self sectionLabel:@"CPU 走势（60 秒）"]];
-    RoundedPanelView *chartPanel = [[RoundedPanelView alloc] initWithFrame:NSZeroRect];
-    NSStackView *chartContent = [NSStackView stackViewWithViews:@[]];
-    chartContent.orientation = NSUserInterfaceLayoutOrientationVertical;
-    chartContent.alignment = NSLayoutAttributeWidth;
-    chartContent.spacing = 5;
-    chartContent.edgeInsets = NSEdgeInsetsMake(10, 13, 10, 13);
-    chartContent.translatesAutoresizingMaskIntoConstraints = NO;
-    [chartPanel addSubview:chartContent];
-    [NSLayoutConstraint activateConstraints:@[
-        [chartContent.leadingAnchor constraintEqualToAnchor:chartPanel.leadingAnchor],
-        [chartContent.trailingAnchor constraintEqualToAnchor:chartPanel.trailingAnchor],
-        [chartContent.topAnchor constraintEqualToAnchor:chartPanel.topAnchor],
-        [chartContent.bottomAnchor constraintEqualToAnchor:chartPanel.bottomAnchor]
-    ]];
-    NSStackView *chartHeader = [NSStackView stackViewWithViews:@[]];
-    chartHeader.orientation = NSUserInterfaceLayoutOrientationHorizontal;
-    chartHeader.alignment = NSLayoutAttributeCenterY;
-    chartHeader.distribution = NSStackViewDistributionFill;
-    NSTextField *chartTitle = [self label:@"最近 60 秒 CPU 使用率" size:12];
-    chartTitle.font = [NSFont systemFontOfSize:12 weight:NSFontWeightMedium];
-    [chartTitle setContentHuggingPriority:NSLayoutPriorityRequired
-                                   forOrientation:NSLayoutConstraintOrientationHorizontal];
-    self.chartValue = [self valueLabel:@"暂无数据" size:11];
-    self.chartValue.alignment = NSTextAlignmentLeft;
-    [self.chartValue setContentHuggingPriority:NSLayoutPriorityRequired
-                                  forOrientation:NSLayoutConstraintOrientationHorizontal];
-    NSView *chartSpacer = [[NSView alloc] initWithFrame:NSZeroRect];
-    [chartSpacer setContentHuggingPriority:NSLayoutPriorityDefaultLow
-                                    forOrientation:NSLayoutConstraintOrientationHorizontal];
-    [chartSpacer setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
-                                                   forOrientation:NSLayoutConstraintOrientationHorizontal];
-    [chartHeader addArrangedSubview:chartTitle];
-    [chartHeader addArrangedSubview:self.chartValue];
-    [chartHeader addArrangedSubview:chartSpacer];
-    [chartContent addArrangedSubview:chartHeader];
-    self.sparkline = [[SparklineView alloc] initWithFrame:NSZeroRect];
-    [self.sparkline.heightAnchor constraintEqualToConstant:58].active = YES;
-    [chartContent addArrangedSubview:self.sparkline];
-    self.history = [self valueLabel:@"暂无数据" size:10];
-    self.history.textColor = [NSColor tertiaryLabelColor];
-    [chartContent addArrangedSubview:self.history];
-    [chartPanel.heightAnchor constraintGreaterThanOrEqualToConstant:110].active = YES;
-    [root addArrangedSubview:chartPanel];
 
     [root addArrangedSubview:[self separator]];
     NSStackView *processHeader = [NSStackView stackViewWithViews:@[]];
@@ -740,22 +1088,27 @@ static NSColor *UISeverityColor(UISeverity severity) {
     self.table.dataSource = self;
     self.table.delegate = self;
     self.table.usesAlternatingRowBackgroundColors = YES;
-    self.table.gridStyleMask = NSTableViewSolidHorizontalGridLineMask;
-    self.table.rowHeight = 27;
+    self.table.gridStyleMask = NSTableViewGridNone;
+    self.table.style = NSTableViewStyleFullWidth;
+    self.table.rowHeight = 32;
     self.table.intercellSpacing = NSMakeSize(12, 0);
-    self.table.columnAutoresizingStyle = NSTableViewLastColumnOnlyAutoresizingStyle;
+    self.table.columnAutoresizingStyle = NSTableViewSequentialColumnAutoresizingStyle;
     self.table.selectionHighlightStyle = NSTableViewSelectionHighlightStyleNone;
     NSArray *specs = @[
-        @[@"pid", @"进程号", @70], @[@"name", @"进程", @300],
-        @[@"cpu", @"CPU 占用", @100], @[@"mem", @"内存", @100]
+        @[@"pid", @"进程号", @64], @[@"name", @"进程", @260],
+        @[@"cpu", @"CPU 占用", @90], @[@"mem", @"内存", @90]
     ];
     for (NSArray *spec in specs) {
         NSTableColumn *column = [[NSTableColumn alloc] initWithIdentifier:spec[0]];
         column.title = spec[1];
         column.width = [spec[2] doubleValue];
+        BOOL isName = [column.identifier isEqualToString:@"name"];
+        column.minWidth = isName ? 140 : column.width;
+        column.resizingMask = isName ? NSTableColumnAutoresizingMask | NSTableColumnUserResizingMask
+                                    : NSTableColumnNoResizing;
         column.headerCell.font = [NSFont systemFontOfSize:11 weight:NSFontWeightSemibold];
         column.headerCell.textColor = [NSColor secondaryLabelColor];
-        column.headerCell.alignment = NSTextAlignmentLeft;
+        column.headerCell.alignment = isName ? NSTextAlignmentLeft : NSTextAlignmentRight;
         [self.table addTableColumn:column];
     }
 
@@ -766,7 +1119,7 @@ static NSColor *UISeverityColor(UISeverity severity) {
     tableScroll.drawsBackground = NO;
     tableScroll.borderType = NSNoBorder;
     tableScroll.translatesAutoresizingMaskIntoConstraints = NO;
-    NSView *tableWrapper = [[NSView alloc] initWithFrame:NSZeroRect];
+    RoundedPanelView *tableWrapper = [[RoundedPanelView alloc] initWithFrame:NSZeroRect];
     tableWrapper.translatesAutoresizingMaskIntoConstraints = NO;
     [tableWrapper addSubview:tableScroll];
     [NSLayoutConstraint activateConstraints:@[
@@ -781,15 +1134,18 @@ static NSColor *UISeverityColor(UISeverity severity) {
     self.emptyState.translatesAutoresizingMaskIntoConstraints = NO;
     [tableWrapper addSubview:self.emptyState];
     [NSLayoutConstraint activateConstraints:@[
-        [self.emptyState.leadingAnchor constraintGreaterThanOrEqualToAnchor:tableWrapper.leadingAnchor
-                                                                   constant:20],
+        [self.emptyState.leadingAnchor constraintEqualToAnchor:tableWrapper.leadingAnchor constant:12],
         [self.emptyState.trailingAnchor constraintLessThanOrEqualToAnchor:tableWrapper.trailingAnchor
-                                                                    constant:-20],
-        [self.emptyState.centerXAnchor constraintEqualToAnchor:tableWrapper.centerXAnchor],
+                                                                    constant:-12],
         [self.emptyState.centerYAnchor constraintEqualToAnchor:tableWrapper.centerYAnchor]
     ]];
     [root addArrangedSubview:tableWrapper];
-    [tableWrapper.heightAnchor constraintGreaterThanOrEqualToConstant:170].active = YES;
+    [tableWrapper.heightAnchor constraintGreaterThanOrEqualToConstant:240].active = YES;
+
+    for (NSView *section in root.arrangedSubviews) {
+        section.translatesAutoresizingMaskIntoConstraints = NO;
+        [section.widthAnchor constraintEqualToAnchor:root.widthAnchor constant:-48].active = YES;
+    }
 
     [self updateTableHeaders];
     [window center];
@@ -804,66 +1160,106 @@ static NSColor *UISeverityColor(UISeverity severity) {
     if (core_snapshot(self.core, &_snapshot) != 0)
         return;
 
-    const BOOL cpuAvailable = !(_snapshot.stale_mask & CORE_STALE_CPU);
-    const BOOL memAvailable = !(_snapshot.stale_mask & CORE_STALE_MEM) && _snapshot.mem.total > 0;
-    const BOOL swapAvailable = !(_snapshot.stale_mask & CORE_STALE_MEM) && _snapshot.mem.swap_total > 0;
-    const BOOL diskAvailable = !(_snapshot.stale_mask & CORE_STALE_DISK) && _snapshot.disk.total > 0;
     const BOOL cpuStale = (_snapshot.stale_mask & CORE_STALE_CPU) != 0;
     const BOOL memStale = (_snapshot.stale_mask & CORE_STALE_MEM) != 0;
     const BOOL diskStale = (_snapshot.stale_mask & CORE_STALE_DISK) != 0;
+    const BOOL cpuAvailable = !cpuStale;
+    const BOOL memAvailable = !memStale && _snapshot.mem.total > 0;
+    const BOOL swapConfigured = _snapshot.mem.swap_total > 0;
+    const BOOL swapAvailable = !memStale && swapConfigured;
+    const BOOL diskAvailable = !diskStale && _snapshot.disk.total > 0;
+    const BOOL fanAvailable = !(_snapshot.stale_mask & CORE_STALE_FAN) &&
+        _snapshot.has_fans && _snapshot.fans.count > 0;
 
     double memUsed = (double)(_snapshot.mem.app + _snapshot.mem.wired + _snapshot.mem.compressed);
     double memPct = memAvailable ? 100.0 * memUsed / _snapshot.mem.total : 0.0;
     double swapPct = swapAvailable ? 100.0 * _snapshot.mem.swap_used / _snapshot.mem.swap_total : 0.0;
     double diskPct = diskAvailable ? 100.0 * _snapshot.disk.used / _snapshot.disk.total : 0.0;
+    memPct = MIN(100.0, MAX(0.0, memPct));
+    swapPct = MIN(100.0, MAX(0.0, swapPct));
+    diskPct = MIN(100.0, MAX(0.0, diskPct));
 
-    NSString *cpuValue = cpuAvailable
-        ? [NSString stringWithFormat:@"%.1f%%", _snapshot.cpu.busy] : @"数据陈旧";
-    NSString *cpuDetail = cpuAvailable
-        ? [NSString stringWithFormat:@"用户 %.1f · 系统 %.1f · 空闲 %.1f",
-            _snapshot.cpu.user, _snapshot.cpu.system, _snapshot.cpu.idle]
-        : @"本项数据暂不可用";
+    UISeverity cpuSeverity = [self severityForAvailable:cpuAvailable stale:cpuStale
+                                                  percent:_snapshot.cpu.busy];
+    UISeverity memSeverity = [self severityForAvailable:memAvailable stale:memStale percent:memPct];
+    UISeverity swapSeverity = memStale ? UISeverityWarning
+        : (swapConfigured ? [self severityForAvailable:swapAvailable stale:NO percent:swapPct]
+                          : UISeverityNeutral);
+    UISeverity diskSeverity = [self severityForAvailable:diskAvailable stale:diskStale percent:diskPct];
+
+    NSString *cpuValue = cpuStale ? @"数据陈旧" : (cpuAvailable
+        ? [NSString stringWithFormat:@"%.1f%%", _snapshot.cpu.busy] : @"不可用");
+    NSString *cpuDetail = cpuStale ? @"本项数据暂不可用"
+        : [NSString stringWithFormat:@"用户 %.1f · 系统 %.1f · 空闲 %.1f",
+            _snapshot.cpu.user, _snapshot.cpu.system, _snapshot.cpu.idle];
     [self.metricCards[METRIC_CPU] setPercent:_snapshot.cpu.busy value:cpuValue detail:cpuDetail
-        state:cpuStale ? @"数据陈旧" : (cpuAvailable ? @"正常" : @"不可用")
-        severity:cpuStale ? UISeverityWarning : (cpuAvailable ? UISeverityNormal : UISeverityError)];
+        state:cpuStale ? @"数据陈旧" : (cpuSeverity == UISeverityError ? @"高占用"
+            : (cpuSeverity == UISeverityWarning ? @"注意" : @"正常")) severity:cpuSeverity];
 
-    NSString *memValue = memAvailable
-        ? [NSString stringWithFormat:@"%.1f%%", memPct]
-        : (memStale ? @"数据陈旧" : @"不可用");
+    NSString *memValue = memStale ? @"数据陈旧" : (memAvailable
+        ? [NSString stringWithFormat:@"%.1f%%", memPct] : @"不可用");
     NSString *memDetail = memAvailable
         ? [NSString stringWithFormat:@"已用 %.1fG / %.1fG", memUsed / 1073741824.0,
             _snapshot.mem.total / 1073741824.0] : @"本项数据暂不可用";
     [self.metricCards[METRIC_MEMORY] setPercent:memPct value:memValue detail:memDetail
-        state:memStale ? @"数据陈旧" : (memAvailable ? @"正常" : @"不可用")
-        severity:memStale ? UISeverityWarning : (memAvailable ? UISeverityNormal : UISeverityError)];
+        state:memStale ? @"数据陈旧" : (memSeverity == UISeverityError ? @"高占用"
+            : (memSeverity == UISeverityWarning ? @"注意" : @"正常")) severity:memSeverity];
 
-    NSString *swapValue = swapAvailable
-        ? [NSString stringWithFormat:@"%.1f%%", swapPct] : @"未启用";
+    NSString *swapValue = memStale ? @"数据陈旧" : (swapAvailable
+        ? [NSString stringWithFormat:@"%.1f%%", swapPct] : @"未启用");
     NSString *swapDetail = swapAvailable
         ? [NSString stringWithFormat:@"已用 %.1fG / %.1fG", _snapshot.mem.swap_used / 1073741824.0,
-            _snapshot.mem.swap_total / 1073741824.0] : @"系统未配置交换空间";
+            _snapshot.mem.swap_total / 1073741824.0] : (memStale ? @"本项数据暂不可用" : @"系统未配置交换空间");
     [self.metricCards[METRIC_SWAP] setPercent:swapPct value:swapValue detail:swapDetail
-        state:memStale ? @"数据陈旧" : (swapAvailable ? @"正常" : @"未启用")
-        severity:memStale ? UISeverityWarning : (swapAvailable ? UISeverityNormal : UISeverityNeutral)];
+        state:memStale ? @"数据陈旧" : (swapConfigured && swapSeverity == UISeverityError ? @"高占用"
+            : (swapConfigured && swapSeverity == UISeverityWarning ? @"注意"
+                : (swapConfigured ? @"正常" : @"未启用")))
+        severity:swapSeverity];
 
-    NSString *diskValue = diskAvailable
-        ? [NSString stringWithFormat:@"%.1f%%", diskPct]
-        : (diskStale ? @"数据陈旧" : @"不可用");
+    NSString *diskValue = diskStale ? @"数据陈旧" : (diskAvailable
+        ? [NSString stringWithFormat:@"%.1f%%", diskPct] : @"不可用");
     NSString *diskDetail = diskAvailable
         ? [NSString stringWithFormat:@"已用 %.1fG / %.1fG", _snapshot.disk.used / 1073741824.0,
             _snapshot.disk.total / 1073741824.0] : @"本项数据暂不可用";
     [self.metricCards[METRIC_DISK] setPercent:diskPct value:diskValue detail:diskDetail
-        state:diskStale ? @"数据陈旧" : (diskAvailable ? @"正常" : @"不可用")
-        severity:diskStale ? UISeverityWarning : (diskAvailable ? UISeverityNormal : UISeverityError)];
+        state:diskStale ? @"数据陈旧" : (diskSeverity == UISeverityError ? @"高占用"
+            : (diskSeverity == UISeverityWarning ? @"注意" : @"正常")) severity:diskSeverity];
 
+    [self recordHistoryForSnapshot:cpuAvailable memoryAvailable:memAvailable
+                     swapAvailable:swapAvailable diskAvailable:diskAvailable
+                      fanAvailable:fanAvailable];
+
+    NSArray *cpuHistory = cpuStale ? @[] : [self cpuHistoryValues];
+    [self.metricCards[METRIC_CPU] setChartValues:cpuHistory minimum:0 maximum:100
+                                         emptyText:cpuStale ? @"数据陈旧" : @"暂无历史"];
+    [self.metricCards[METRIC_MEMORY] setChartValues:memAvailable ? self.memoryHistory : @[]
+                                             minimum:0 maximum:100
+                                           emptyText:memStale ? @"数据陈旧" : @"暂无历史"];
+    [self.metricCards[METRIC_SWAP] setChartValues:swapAvailable ? self.swapHistory : @[]
+                                             minimum:0 maximum:100
+                                           emptyText:memStale ? @"数据陈旧" : @"未启用"];
+    [self.metricCards[METRIC_DISK] setChartValues:diskAvailable ? self.diskHistory : @[]
+                                             minimum:0 maximum:100
+                                           emptyText:diskStale ? @"数据陈旧" : @"暂无历史"];
+
+    /* 未配置交换空间是中性状态，不应把整机健康度变成警告。 */
     NSInteger availableCount = (cpuAvailable ? 1 : 0) + (memAvailable ? 1 : 0) +
-        (swapAvailable ? 1 : 0) + (diskAvailable ? 1 : 0);
-    UISeverity overallSeverity = availableCount == 0 ? UISeverityError
-        : ((_snapshot.stale_mask || _snapshot.paused || availableCount < METRIC_COUNT)
-            ? UISeverityWarning : UISeverityNormal);
-    NSString *overallTitle = availableCount == 0 ? @"数据不可用"
+        (swapAvailable || (!memStale && !swapConfigured) ? 1 : 0) + (diskAvailable ? 1 : 0);
+    UISeverity overallSeverity = UISeverityNormal;
+    for (NSNumber *severityValue in @[@(cpuSeverity), @(memSeverity), @(swapSeverity), @(diskSeverity)]) {
+        UISeverity severity = (UISeverity)severityValue.integerValue;
+        if (severity == UISeverityError)
+            overallSeverity = UISeverityError;
+        else if (severity == UISeverityWarning && overallSeverity != UISeverityError)
+            overallSeverity = UISeverityWarning;
+    }
+    if (_snapshot.paused || _snapshot.stale_mask || availableCount < METRIC_COUNT)
+        if (overallSeverity != UISeverityError)
+            overallSeverity = UISeverityWarning;
+    NSString *overallTitle = overallSeverity == UISeverityError
+        ? (availableCount < METRIC_COUNT ? @"部分数据不可用" : @"资源占用较高")
         : (_snapshot.paused ? @"采样已暂停"
-        : (_snapshot.stale_mask || availableCount < METRIC_COUNT ? @"部分数据需要关注" : @"系统状态正常"));
+        : (overallSeverity == UISeverityWarning ? @"部分数据需要关注" : @"系统状态正常"));
     NSString *overallDetail = [NSString stringWithFormat:@"%ld/4 项指标可用 · %d 个进程 · %@",
         (long)availableCount, _snapshot.proc_total,
         _snapshot.paused ? @"暂停中" : @"实时更新"];
@@ -875,36 +1271,32 @@ static NSColor *UISeverityColor(UISeverity severity) {
         ? [NSString stringWithFormat:@"%.2f  %.2f  %.2f", _snapshot.load[0], _snapshot.load[1],
             _snapshot.load[2]] : @"数据陈旧";
     [self.loadTile setValueText:loadValue severity:loadSeverity];
+    [self.loadTile setChartSeries:loadSeverity == UISeverityNormal
+        ? @[self.load1History, self.load5History, self.load15History] : @[]
+        minimum:0 maximum:0 emptyText:loadSeverity == UISeverityNormal ? @"暂无历史" : @"数据陈旧"];
 
     UISeverity processSeverity = (_snapshot.stale_mask & CORE_STALE_PROC)
         ? UISeverityWarning : UISeverityNormal;
     [self.processTile setValueText:processSeverity == UISeverityNormal
         ? [NSString stringWithFormat:@"%d 个", _snapshot.proc_total] : @"数据陈旧"
         severity:processSeverity];
+    [self.processTile setChartSeries:processSeverity == UISeverityNormal ? @[self.processHistory] : @[]
+        minimum:0 maximum:0 emptyText:processSeverity == UISeverityNormal ? @"暂无历史" : @"数据陈旧"];
 
     UISeverity uptimeSeverity = (_snapshot.stale_mask & CORE_STALE_UP) || _snapshot.uptime < 0
         ? UISeverityWarning : UISeverityNormal;
     [self.uptimeTile setValueText:uptimeSeverity == UISeverityNormal
         ? [self uptimeSummary] : @"运行时间不可用" severity:uptimeSeverity];
+    if (uptimeSeverity == UISeverityNormal)
+        [self.uptimeTile setDurationChart];
+    else
+        [self.uptimeTile setChartSeries:@[] minimum:0 maximum:1 emptyText:@"不可用"];
 
-    BOOL fanAvailable = _snapshot.has_fans && _snapshot.fans.count > 0;
     UISeverity fanSeverity = (_snapshot.stale_mask & CORE_STALE_FAN)
         ? UISeverityWarning : (fanAvailable ? UISeverityNormal : UISeverityNeutral);
     [self.fanTile setValueText:[self fanSummary] severity:fanSeverity];
-
-    NSMutableArray<NSNumber *> *historyValues = [NSMutableArray arrayWithCapacity:_snapshot.history_len];
-    for (int i = 0; i < _snapshot.history_len; i++) {
-        int index = (_snapshot.history_head - _snapshot.history_len + i + CORE_CPU_HISTORY)
-            % CORE_CPU_HISTORY;
-        [historyValues addObject:@(_snapshot.history[index])];
-    }
-    self.sparkline.values = historyValues;
-    self.sparkline.strokeColor = cpuStale ? [NSColor systemOrangeColor] : [NSColor systemBlueColor];
-    self.chartValue.stringValue = cpuAvailable
-        ? [NSString stringWithFormat:@"当前 %.1f%%", _snapshot.cpu.busy] : @"当前不可用";
-    self.history.stringValue = _snapshot.history_len > 0
-        ? [NSString stringWithFormat:@"已收集 %d 秒 · 数值范围 0–100%%", _snapshot.history_len]
-        : @"暂无历史数据";
+    [self.fanTile setChartSeries:fanAvailable ? @[self.fanHistory] : @[] minimum:0 maximum:0
+        emptyText:(fanSeverity == UISeverityWarning ? @"数据陈旧" : @"无传感器")];
 
     BOOL processStale = (_snapshot.stale_mask & CORE_STALE_PROC) != 0;
     self.emptyState.hidden = _snapshot.proc_count > 0;
@@ -944,21 +1336,31 @@ static NSColor *UISeverityColor(UISeverity severity) {
     cell.textField.font = nameColumn
         ? [NSFont systemFontOfSize:12 weight:NSFontWeightRegular]
         : [NSFont monospacedSystemFontOfSize:12 weight:NSFontWeightRegular];
-    cell.textField.alignment = NSTextAlignmentLeft;
+    cell.textField.alignment = nameColumn ? NSTextAlignmentLeft : NSTextAlignmentRight;
     cell.textField.textColor = [NSColor labelColor];
     if ([column.identifier isEqualToString:@"pid"])
         cell.textField.stringValue = [NSString stringWithFormat:@"%d", p.pid];
     else if (nameColumn)
         cell.textField.stringValue = [NSString stringWithUTF8String:p.name] ?: @"";
     else if ([column.identifier isEqualToString:@"cpu"])
-        cell.textField.stringValue = [NSString stringWithFormat:@"%.1f", p.cpu];
+        cell.textField.stringValue = [NSString stringWithFormat:@"%.1f%%", p.cpu];
     else
-        cell.textField.stringValue = [NSString stringWithFormat:@"%.1fM", p.mem / 1048576.0];
+        cell.textField.stringValue = p.mem >= 1073741824ULL
+            ? [NSString stringWithFormat:@"%.1f GB", p.mem / 1073741824.0]
+            : [NSString stringWithFormat:@"%.1f MB", p.mem / 1048576.0];
+    if ([column.identifier isEqualToString:@"pid"])
+        cell.textField.textColor = NSColor.secondaryLabelColor;
+    if ([column.identifier isEqualToString:@"cpu"] && p.cpu >= 60.0)
+        cell.textField.textColor = p.cpu >= 85.0 ? NSColor.systemRedColor : NSColor.systemOrangeColor;
+    cell.textField.toolTip = cell.textField.stringValue;
     return cell;
 }
 
 - (void)tableView:(NSTableView *)tableView didClickTableColumn:(NSTableColumn *)column {
     (void)tableView;
+    if (![column.identifier isEqualToString:@"mem"] &&
+        ![column.identifier isEqualToString:@"cpu"])
+        return;
     self.sort = [column.identifier isEqualToString:@"mem"] ? PROC_SORT_MEM : PROC_SORT_CPU;
     core_set_sort(self.core, self.sort);
     [self updateTableHeaders];
@@ -966,6 +1368,8 @@ static NSColor *UISeverityColor(UISeverity severity) {
 
 - (void)applicationWillTerminate:(NSNotification *)notification {
     (void)notification;
+    [self.timer invalidate];
+    self.timer = nil;
     core_destroy(self.core);
     self.core = NULL;
 }
@@ -982,7 +1386,7 @@ int main(int argc, const char *argv[]) {
     (void)argv;
     @autoreleasepool {
         NSApplication *app = [NSApplication sharedApplication];
-        MacMonitorApp *delegate = [[MacMonitorApp alloc] init];
+        __attribute__((objc_precise_lifetime)) MacMonitorApp *delegate = [[MacMonitorApp alloc] init];
         app.delegate = delegate;
         [app setActivationPolicy:NSApplicationActivationPolicyRegular];
         [app run];

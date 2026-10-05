@@ -7,6 +7,7 @@
 #include <sys/ioctl.h>
 #include <time.h>
 #include <unistd.h>
+#include <wchar.h>
 
 enum {
     PAIR_GOOD = 1,
@@ -20,7 +21,7 @@ enum {
 /* 由 ui_repaint() 置位，表示已知屏幕需要整屏重写。 */
 static int repaint_all;
 
-/* 进度条起始的列，以及它允许达到的最大宽度。 */
+/* 数值从左侧固定列开始，进度条紧随其后，避免读数看起来被推到右侧。 */
 #define METER_COL 8
 #define METER_MAX 44
 
@@ -29,7 +30,7 @@ static int repaint_all;
  * "  30.0%" 和 "3550 RPM" 都是八列。
  */
 #define VALUE_W   8
-#define VALUE_GAP 3
+#define VALUE_GAP 2
 
 /* locale 能承载时用方块字形，否则退回 ASCII。 */
 static const char *glyph_full  = "#";
@@ -144,6 +145,7 @@ static int color_for(double pct)
  * ncurses 会在右边界折行，把溢出的部分涂到下一行去，所以每一段长度不定的
  * 字符串都要走下面这一对函数，按这一行实际剩下的空间裁掉。
  *
+ * 按 locale 解码，并用 wcwidth 计算中文双列和组合字符的宽度。
  * 返回的是 s 的最长前缀的**字节**长度，渲染出来不超过 cols 列。mvaddnstr()
  * 数的是字节，而一个方块字形是三字节一列宽，所以直接拿列预算去喂它会把这些
  * 进度条裁到三分之一长。
@@ -153,13 +155,17 @@ static size_t fit_cols(const char *s, int cols)
     size_t i = 0;
     int used = 0;
 
-    while (s[i] != '\0') {
-        if ((s[i] & 0xc0) != 0x80) {   /* 续字节不占列 */
-            if (used == cols)
-                break;                 /* 已经满了，而这里正好是新字形的开头 */
-            used++;
-        }
-        i++;
+    mbstate_t state = {0};
+    while (s[i] != '\0' && used < cols) {
+        wchar_t ch;
+        size_t bytes = mbrtowc(&ch, s + i, MB_CUR_MAX, &state);
+        if (bytes == (size_t)-1 || bytes == (size_t)-2 || bytes == 0)
+            break;
+        int width = wcwidth(ch);
+        if (width < 0 || used + width > cols)
+            break;
+        used += width;
+        i += bytes;
     }
     return i;
 }
@@ -221,24 +227,24 @@ static void draw_title(int cols, const ui_state_t *st)
     localtime_r(&t, &tm);
     strftime(clock, sizeof(clock), "%H:%M:%S", &tm);
 
-    /* 那串长提示在经典 80 列终端里放不下。 */
-    const char *hint = cols >= 92
-        ? "q quit   +/- speed   c/m sort   space pause "
-        : "q quit  +/-  c/m  space ";
-
-    snprintf(line, sizeof(line), " MacMonitor  %s   every %.2fs%s   %s",
-             clock, st->interval, st->paused ? "  [PAUSED]" : "", hint);
+    snprintf(line, sizeof(line), " MacMonitor  %s  %.2f秒%s",
+             clock, st->interval, st->paused ? "  已暂停" : "  采样中");
 
     attron(COLOR_PAIR(PAIR_TITLE) | A_BOLD);
-    for (int x = 0; x < cols; x++)
-        mvaddch(0, x, (size_t)x < strlen(line) ? (chtype)(unsigned char)line[x]
-                                               : ' ');
+    mvhline(0, 0, ' ', cols);
+    put(0, 0, line);
     attroff(COLOR_PAIR(PAIR_TITLE) | A_BOLD);
+
+    attron(COLOR_PAIR(PAIR_LABEL));
+    put(1, 1, cols >= 86
+        ? "q 退出   +/- 调速   c CPU排序 / m 内存排序   空格 暂停/继续"
+        : "q退出 +/-调速 c/m排序 空格暂停/继续");
+    attroff(COLOR_PAIR(PAIR_LABEL));
 }
 
 /*
- * pct 决定进度条的长度和颜色；value 是印在它旁边的文字。风扇那行两者不同，
- * 因为它是一个转速而不是百分比，读数是 RPM。
+ * pct 决定进度条的长度和颜色；value 固定从左侧数值列开始，随后才是进度条。
+ * 风扇那行两者不同，因为它是一个转速而不是百分比，读数是 RPM。
  */
 static void metric_row(int row, const char *label, double pct, int width,
                        const char *value, const char *detail)
@@ -251,13 +257,16 @@ static void metric_row(int row, const char *label, double pct, int width,
     put(row, 1, label);
     attroff(COLOR_PAIR(PAIR_LABEL) | A_BOLD);
 
+    const int meter_col = METER_COL + VALUE_W + VALUE_GAP;
+    const int detail_col = meter_col + width + 2 + VALUE_GAP;
+
     attron(COLOR_PAIR(color_for(pct)));
-    put(row, METER_COL, bar);
-    put(row, METER_COL + width + 2, value);
+    put(row, METER_COL, value);
+    put(row, meter_col, bar);
     attroff(COLOR_PAIR(color_for(pct)));
 
     attron(COLOR_PAIR(PAIR_VALUE));
-    put(row, METER_COL + width + 2 + VALUE_W + VALUE_GAP, detail);
+    put(row, detail_col, detail);
     attroff(COLOR_PAIR(PAIR_VALUE));
 }
 
@@ -265,18 +274,18 @@ static void metric_row(int row, const char *label, double pct, int width,
 static int draw_fans(int row, int width, const fan_info_t *fans)
 {
     for (int i = 0; i < fans->count; i++) {
-        char label[8];
+        char label[24];
         char value[16];
         char detail[64];
         const double max = fans->max_rpm[i];
         const double pct = max > 0.0 ? 100.0 * fans->rpm[i] / max : 0.0;
 
         if (fans->count > 1)
-            snprintf(label, sizeof(label), "FAN%d", i);
+            snprintf(label, sizeof(label), "风扇%d", i + 1);
         else
-            snprintf(label, sizeof(label), "FAN");
+            snprintf(label, sizeof(label), "风扇");
         snprintf(value, sizeof(value), "%.0f RPM", fans->rpm[i]);
-        snprintf(detail, sizeof(detail), "min %.0f   max %.0f",
+        snprintf(detail, sizeof(detail), "最低 %.0f   最高 %.0f",
                  fans->min_rpm[i], max);
 
         metric_row(row + i, label, pct, width, value, detail);
@@ -291,14 +300,14 @@ static void draw_history(int row, int cols, const ui_state_t *st)
      * 历史的跨度是 60 × interval 秒，不是一个固定的 60 秒。写死标签会在
      * 你把间隔调快或调慢之后说谎。
      */
-    char label[16];
-    snprintf(label, sizeof(label), "CPU %.0fs", CPU_HISTORY * st->interval);
+    char label[32];
+    snprintf(label, sizeof(label), "CPU %.0f秒", CPU_HISTORY * st->interval);
 
     attron(COLOR_PAIR(PAIR_LABEL) | A_BOLD);
     mvaddstr(row, 1, label);
     attroff(COLOR_PAIR(PAIR_LABEL) | A_BOLD);
 
-    int histw = cols - 12;
+    int histw = cols - 15;
     if (histw > CPU_HISTORY) histw = CPU_HISTORY;
     if (histw > st->len) histw = st->len;
 
@@ -313,13 +322,13 @@ static void draw_history(int row, int cols, const ui_state_t *st)
         if (lvl > 7) lvl = 7;
 
         attron(COLOR_PAIR(color_for(v)));
-        mvaddstr(row, 9 + i, spark[lvl]);
+        mvaddstr(row, 14 + i, spark[lvl]);
         attroff(COLOR_PAIR(color_for(v)));
     }
 }
 
 static void draw_procs(int top, int avail, int cols, const proc_info_t *procs,
-                       int nprocs)
+                       int nprocs, proc_sort_t sort)
 {
     int namew = cols - 27;
     if (namew < 12) namew = 12;
@@ -329,10 +338,10 @@ static void draw_procs(int top, int avail, int cols, const proc_info_t *procs,
     const int mem_col = cpu_col + 7;
 
     attron(COLOR_PAIR(PAIR_LABEL) | A_BOLD);
-    mvprintw(top, 1, "%s", "PID");
-    mvprintw(top, 9, "%-*.*s", namew, namew, "COMMAND");
-    mvprintw(top, cpu_col, "%s", "CPU%");
-    mvprintw(top, mem_col, "%s", "MEM");
+    put(top, 1, "进程号");
+    put(top, 9, "进程名称");
+    put(top, cpu_col, sort == PROC_SORT_CPU ? "CPU%↓" : "CPU%");
+    put(top, mem_col, sort == PROC_SORT_MEM ? "内存↓" : "内存");
     attroff(COLOR_PAIR(PAIR_LABEL) | A_BOLD);
 
     if (cols > 2)
@@ -340,7 +349,7 @@ static void draw_procs(int top, int avail, int cols, const proc_info_t *procs,
 
     if (nprocs == 0) {
         attron(COLOR_PAIR(PAIR_VALUE));
-        mvaddstr(top + 2, 1, "(no processes visible)");
+        put(top + 2, 1, "（暂无可见进程）");
         attroff(COLOR_PAIR(PAIR_VALUE));
         return;
     }
@@ -356,7 +365,7 @@ static void draw_procs(int top, int avail, int cols, const proc_info_t *procs,
         if (hot)
             attron(COLOR_PAIR(color_for(p->cpu)) | A_BOLD);
         mvprintw(row, 1, "%d", p->pid);
-        mvprintw(row, 9, "%-*.*s", namew, namew, p->name);
+        mvaddnstr(row, 9, p->name, (int)fit_cols(p->name, namew));
         mvprintw(row, cpu_col, "%.1f", p->cpu);
         if (hot)
             attroff(COLOR_PAIR(color_for(p->cpu)) | A_BOLD);
@@ -383,7 +392,7 @@ void ui_draw(const cpu_usage_t *cpu, const mem_usage_t *mem,
         getmaxyx(stdscr, rows, cols);
         erase();
         if (rows > 0 && cols > 0)
-            mvaddnstr(rows / 2, 0, "terminal too small", cols);
+            put(rows / 2, 0, "终端太小");
         refresh();
         return;
     }
@@ -393,9 +402,10 @@ void ui_draw(const cpu_usage_t *cpu, const mem_usage_t *mem,
      * 进程表头）加上两行进程就放不下了，结果会是一团被裁过的乱码，而不是
      * 同一个界面的缩小版——所以干脆明说。
      */
-    if (rows < 14 + fan_rows || cols < 46) {
+    if (rows < 15 + fan_rows || cols < 46) {
         erase();
-        mvaddstr(rows / 2, 1, "terminal too small");
+        put(rows / 2, 1, "终端太小，请放大窗口");
+        refresh();
         return;
     }
 
@@ -404,7 +414,7 @@ void ui_draw(const cpu_usage_t *cpu, const mem_usage_t *mem,
      * 百分比，以及最长的说明串（"12.4G / 16.0G   wired 2.8G   comp 320M"）
      * 都要挤在这一行里。
      */
-    int width = cols - METER_COL - (2 + VALUE_W + VALUE_GAP) - 38;
+    int width = cols - (METER_COL + VALUE_W + VALUE_GAP) - (2 + VALUE_GAP) - 38;
     if (width > METER_MAX) width = METER_MAX;
     if (width < 10) width = 10;
 
@@ -440,9 +450,9 @@ void ui_draw(const cpu_usage_t *cpu, const mem_usage_t *mem,
     char a[16], b[16], c[16], d[16];
     char pct[16];
 
-    row = 1;
+    row = 2;
 
-    snprintf(detail, sizeof(detail), "u %.1f  s %.1f  i %.1f",
+    snprintf(detail, sizeof(detail), "用户 %.1f  系统 %.1f  空闲 %.1f",
              cpu->user, cpu->system, cpu->idle);
     snprintf(pct, sizeof(pct), "%.1f%%", cpu->busy);
     metric_row(row++, "CPU", cpu->busy, width, pct, detail);
@@ -451,23 +461,23 @@ void ui_draw(const cpu_usage_t *cpu, const mem_usage_t *mem,
     human_bytes(mem->total, b, sizeof(b));
     human_bytes(mem->wired, c, sizeof(c));
     human_bytes(mem->compressed, d, sizeof(d));
-    snprintf(detail, sizeof(detail), "%s / %s   wired %s   comp %s",
+    snprintf(detail, sizeof(detail), "%s / %s   联动 %s   压缩 %s",
              a, b, c, d);
     snprintf(pct, sizeof(pct), "%.1f%%", mem_pct);
-    metric_row(row++, "MEM", mem_pct, width, pct, detail);
+    metric_row(row++, "内存", mem_pct, width, pct, detail);
 
     human_bytes(mem->swap_used, a, sizeof(a));
     human_bytes(mem->swap_total, b, sizeof(b));
     snprintf(detail, sizeof(detail), "%s / %s", a, b);
     snprintf(pct, sizeof(pct), "%.1f%%", swap_pct);
-    metric_row(row++, "SWAP", swap_pct, width, pct, detail);
+    metric_row(row++, "交换", swap_pct, width, pct, detail);
 
     human_bytes(disk->used, a, sizeof(a));
     human_bytes(disk->total, b, sizeof(b));
     human_bytes(disk->avail, c, sizeof(c));
-    snprintf(detail, sizeof(detail), "%s / %s   free %s", a, b, c);
+    snprintf(detail, sizeof(detail), "%s / %s   可用 %s", a, b, c);
     snprintf(pct, sizeof(pct), "%.1f%%", disk_pct);
-    metric_row(row++, "DISK", disk_pct, width, pct, detail);
+    metric_row(row++, "磁盘", disk_pct, width, pct, detail);
 
     if (fan_rows > 0)
         row = draw_fans(row, width, fans);
@@ -475,20 +485,20 @@ void ui_draw(const cpu_usage_t *cpu, const mem_usage_t *mem,
     row++;                              /* 空行 */
     draw_history(row++, cols, st);
 
-    char status[128];
+    char status[256];
     if (uptime >= 0)
         snprintf(status, sizeof(status),
-                 "LOAD %.2f %.2f %.2f   UP %ldd %02ldh %02ldm   TASKS %d",
-             load[0], load[1], load[2], uptime / 86400,
-                 (uptime % 86400) / 3600, (uptime % 3600) / 60, total_procs);
+                 "%s进程 %d  负载 %.2f %.2f %.2f  运行 %ld天%02ld时%02ld分",
+                 st->stale_mask ? "[数据陈旧] " : "", total_procs,
+                 load[0], load[1], load[2], uptime / 86400,
+                 (uptime % 86400) / 3600, (uptime % 3600) / 60);
     else
-        snprintf(status, sizeof(status), "LOAD %.2f %.2f %.2f   TASKS %d",
-                 load[0], load[1], load[2], total_procs);
-    if (st->stale_mask)
-        strncat(status, "   DATA STALE", sizeof(status) - strlen(status) - 1);
+        snprintf(status, sizeof(status), "%s进程 %d  负载 %.2f %.2f %.2f",
+                 st->stale_mask ? "[数据陈旧] " : "", total_procs,
+                 load[0], load[1], load[2]);
     put(row++, 1, status);
 
     row++;                              /* 空行 */
-    draw_procs(row, rows - (row + 2), cols, procs, nprocs);
+    draw_procs(row, rows - (row + 2), cols, procs, nprocs, st->sort);
     refresh();
 }

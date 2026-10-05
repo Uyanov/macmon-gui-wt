@@ -16,6 +16,8 @@
 	<string>MacMonitor</string>
 	<key>CFBundleDisplayName</key>
 	<string>MacMonitor</string>
+	<key>CFBundleIconFile</key>
+	<string>MacMonitor.icns</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 

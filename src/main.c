@@ -89,6 +89,8 @@ int main(void)
     int quitting = 0;
 
     setlocale(LC_ALL, "");
+    /* 界面使用 UTF-8；兼容从 LANG=C 或未配置 locale 的终端启动。 */
+    setlocale(LC_CTYPE, "en_US.UTF-8");
     memset(&st, 0, sizeof(st));
     st.interval = 1.0;
     st.sort = PROC_SORT_CPU;

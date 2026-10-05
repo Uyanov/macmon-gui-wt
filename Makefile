@@ -41,12 +41,14 @@ ARCHES   := -arch x86_64 -arch arm64
 CORE_SRCS := $(SRCDIR)/core.c $(SRCDIR)/proclist.c $(SRCDIR)/smc.c $(SRCDIR)/sysinfo.c
 UNIOBJS  := $(CORE_SRCS:$(SRCDIR)/%.c=$(OBJDIR)/universal/%.o)
 GUIOBJ   := $(OBJDIR)/universal/gui.o
+APPICON  := $(CONTENTS)/Resources/MacMonitor.icns
 
 app: $(APP)
 
 $(APP): $(CONTENTS)/MacOS/MacMonitor \
         $(CONTENTS)/Info.plist \
-        $(CONTENTS)/PkgInfo
+        $(CONTENTS)/PkgInfo \
+        $(APPICON)
 	@# 先给嵌套的可执行文件签名，再签整包——包的内容一变签名就作废，顺序不能反。
 	@# Apple Silicon 上未签名的可执行文件根本不会被加载，所以这一步不是可选的；
 	@# 用 ad-hoc 签名（-s -）就够，本机自己用不需要开发者证书。
@@ -74,6 +76,11 @@ $(CONTENTS)/PkgInfo:
 	@mkdir -p $(dir $@)
 	printf 'APPL????' > $@
 
+$(APPICON): packaging/make-icon.py
+	@mkdir -p $(dir $@)
+	python3 $< $(OBJDIR)/MacMonitor.iconset
+	iconutil -c icns $(OBJDIR)/MacMonitor.iconset -o $@
+
 # AddressSanitizer + UndefinedBehaviorSanitizer。macOS 上没有 LeakSanitizer：
 # ASAN_OPTIONS=detect_leaks=1 不会去查泄漏，而是让程序在启动那一刻直接中止。
 # 直接编译到独立的 $(SANBIN)，不写共享的 build/：否则 ASan 目标文件会污染普通
@@ -98,9 +105,21 @@ test: $(TESTBIN)
 $(TESTBIN): $(TESTSRCS) $(TESTDEPS) | $(OBJDIR)
 	$(CC) $(CFLAGS) -I$(SRCDIR) -o $@ $(TESTSRCS) $(TESTDEPS) $(LDLIBS)
 
+# AppKit 测试需要已登录的图形会话，覆盖真正的窗口关闭与事件池清理。
+GUITESTBIN := $(OBJDIR)/test_gui_lifecycle
+test-gui: $(GUITESTBIN)
+	./$(GUITESTBIN) close 0.1
+	./$(GUITESTBIN) close 1.2
+	./$(GUITESTBIN) drain 0.1
+	./$(GUITESTBIN) drain 1.2
+	./$(GUITESTBIN) quit 1.2
+
+$(GUITESTBIN): tests/test_gui_lifecycle.m $(SRCDIR)/gui.m $(wildcard $(SRCDIR)/*.h) $(UNIOBJS)
+	$(CC) $(CFLAGS) -fobjc-arc -I$(SRCDIR) -o $@ $< $(UNIOBJS) $(LDLIBS) -framework Cocoa
+
 clean:
 	rm -rf $(OBJDIR) $(BIN) $(APP) $(SANBIN)
 
-.PHONY: all app clean sanitize test
+.PHONY: all app clean sanitize test test-gui
 
--include $(DEPS) $(UNIOBJS:.o=.d)
+-include $(DEPS) $(UNIOBJS:.o=.d) $(GUIOBJ:.o=.d)
