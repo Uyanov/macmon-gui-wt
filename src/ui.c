@@ -275,7 +275,7 @@ static int draw_fans(int row, int width, const fan_info_t *fans)
             snprintf(label, sizeof(label), "FAN%d", i);
         else
             snprintf(label, sizeof(label), "FAN");
-        snprintf(value, sizeof(value), "%4.0f RPM", fans->rpm[i]);
+        snprintf(value, sizeof(value), "%.0f RPM", fans->rpm[i]);
         snprintf(detail, sizeof(detail), "min %.0f   max %.0f",
                  fans->min_rpm[i], max);
 
@@ -329,10 +329,10 @@ static void draw_procs(int top, int avail, int cols, const proc_info_t *procs,
     const int mem_col = cpu_col + 7;
 
     attron(COLOR_PAIR(PAIR_LABEL) | A_BOLD);
-    mvprintw(top, 1, "%7s", "PID");
+    mvprintw(top, 1, "%s", "PID");
     mvprintw(top, 9, "%-*.*s", namew, namew, "COMMAND");
-    mvprintw(top, cpu_col, "%6s", "CPU%");
-    mvprintw(top, mem_col, "%8s", "MEM");
+    mvprintw(top, cpu_col, "%s", "CPU%");
+    mvprintw(top, mem_col, "%s", "MEM");
     attroff(COLOR_PAIR(PAIR_LABEL) | A_BOLD);
 
     if (cols > 2)
@@ -340,7 +340,7 @@ static void draw_procs(int top, int avail, int cols, const proc_info_t *procs,
 
     if (nprocs == 0) {
         attron(COLOR_PAIR(PAIR_VALUE));
-        mvaddstr(top + 2, 3, "(no processes visible)");
+        mvaddstr(top + 2, 1, "(no processes visible)");
         attroff(COLOR_PAIR(PAIR_VALUE));
         return;
     }
@@ -355,12 +355,12 @@ static void draw_procs(int top, int avail, int cols, const proc_info_t *procs,
 
         if (hot)
             attron(COLOR_PAIR(color_for(p->cpu)) | A_BOLD);
-        mvprintw(row, 1, "%7d", p->pid);
+        mvprintw(row, 1, "%d", p->pid);
         mvprintw(row, 9, "%-*.*s", namew, namew, p->name);
-        mvprintw(row, cpu_col, "%6.1f", p->cpu);
+        mvprintw(row, cpu_col, "%.1f", p->cpu);
         if (hot)
             attroff(COLOR_PAIR(color_for(p->cpu)) | A_BOLD);
-        mvprintw(row, mem_col, "%8s", mem);
+        mvprintw(row, mem_col, "%s", mem);
     }
 }
 
@@ -444,7 +444,7 @@ void ui_draw(const cpu_usage_t *cpu, const mem_usage_t *mem,
 
     snprintf(detail, sizeof(detail), "u %.1f  s %.1f  i %.1f",
              cpu->user, cpu->system, cpu->idle);
-    snprintf(pct, sizeof(pct), "%7.1f%%", cpu->busy);
+    snprintf(pct, sizeof(pct), "%.1f%%", cpu->busy);
     metric_row(row++, "CPU", cpu->busy, width, pct, detail);
 
     human_bytes(mem_used, a, sizeof(a));
@@ -453,20 +453,20 @@ void ui_draw(const cpu_usage_t *cpu, const mem_usage_t *mem,
     human_bytes(mem->compressed, d, sizeof(d));
     snprintf(detail, sizeof(detail), "%s / %s   wired %s   comp %s",
              a, b, c, d);
-    snprintf(pct, sizeof(pct), "%7.1f%%", mem_pct);
+    snprintf(pct, sizeof(pct), "%.1f%%", mem_pct);
     metric_row(row++, "MEM", mem_pct, width, pct, detail);
 
     human_bytes(mem->swap_used, a, sizeof(a));
     human_bytes(mem->swap_total, b, sizeof(b));
     snprintf(detail, sizeof(detail), "%s / %s", a, b);
-    snprintf(pct, sizeof(pct), "%7.1f%%", swap_pct);
+    snprintf(pct, sizeof(pct), "%.1f%%", swap_pct);
     metric_row(row++, "SWAP", swap_pct, width, pct, detail);
 
     human_bytes(disk->used, a, sizeof(a));
     human_bytes(disk->total, b, sizeof(b));
     human_bytes(disk->avail, c, sizeof(c));
     snprintf(detail, sizeof(detail), "%s / %s   free %s", a, b, c);
-    snprintf(pct, sizeof(pct), "%7.1f%%", disk_pct);
+    snprintf(pct, sizeof(pct), "%.1f%%", disk_pct);
     metric_row(row++, "DISK", disk_pct, width, pct, detail);
 
     if (fan_rows > 0)

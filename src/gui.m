@@ -501,6 +501,7 @@ static NSColor *UISeverityColor(UISeverity severity) {
 - (NSTextField *)label:(NSString *)text size:(CGFloat)size {
     NSTextField *label = [NSTextField labelWithString:text];
     label.font = [NSFont systemFontOfSize:size weight:NSFontWeightRegular];
+    label.alignment = NSTextAlignmentLeft;
     label.lineBreakMode = NSLineBreakByTruncatingTail;
     return label;
 }
@@ -509,6 +510,7 @@ static NSColor *UISeverityColor(UISeverity severity) {
     NSTextField *label = [NSTextField labelWithString:text];
     label.font = [NSFont monospacedSystemFontOfSize:size weight:NSFontWeightRegular];
     label.textColor = [NSColor secondaryLabelColor];
+    label.alignment = NSTextAlignmentLeft;
     label.lineBreakMode = NSLineBreakByTruncatingTail;
     return label;
 }
