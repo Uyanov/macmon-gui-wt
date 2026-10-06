@@ -2,6 +2,7 @@
 #define UI_H
 
 #include "proclist.h"
+#include "network.h"
 #include "smc.h"
 #include "sysinfo.h"
 
@@ -35,6 +36,7 @@ int  ui_sync_resize(void);
 void ui_draw(const cpu_usage_t *cpu, const mem_usage_t *mem,
              const disk_usage_t *disk, const double load[3], long uptime,
              const fan_info_t *fans, const proc_info_t *procs, int nprocs,
+             const network_info_t *network, const temperature_info_t *temperature,
              int total_procs,
              const ui_state_t *st);
 

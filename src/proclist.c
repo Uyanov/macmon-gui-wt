@@ -86,6 +86,11 @@ static const char *process_name(pid_t pid, char name[PROC_NAME_MAX])
     return name;
 }
 
+static int cmp_pid(const proc_info_t *x, const proc_info_t *y)
+{
+    return (x->pid > y->pid) - (x->pid < y->pid);
+}
+
 static int cmp_cpu(const void *a, const void *b)
 {
     const proc_info_t *x = a;
@@ -93,7 +98,7 @@ static int cmp_cpu(const void *a, const void *b)
 
     if (x->cpu < y->cpu) return 1;
     if (x->cpu > y->cpu) return -1;
-    return 0;
+    return cmp_pid(x, y);
 }
 
 static int cmp_mem(const void *a, const void *b)
@@ -103,7 +108,39 @@ static int cmp_mem(const void *a, const void *b)
 
     if (x->mem < y->mem) return 1;
     if (x->mem > y->mem) return -1;
-    return 0;
+    return cmp_pid(x, y);
+}
+
+static int cmp_cpu_asc(const void *a, const void *b)
+{
+    const proc_info_t *x = a;
+    const proc_info_t *y = b;
+    if (x->cpu < y->cpu) return -1;
+    if (x->cpu > y->cpu) return 1;
+    return cmp_pid(x, y);
+}
+
+static int cmp_mem_asc(const void *a, const void *b)
+{
+    const proc_info_t *x = a;
+    const proc_info_t *y = b;
+    if (x->mem < y->mem) return -1;
+    if (x->mem > y->mem) return 1;
+    return cmp_pid(x, y);
+}
+
+void proclist_sort(proc_info_t *procs, int count, proc_sort_t sort)
+{
+    if (count < 2) return;
+    int (*compare)(const void *, const void *) = cmp_cpu;
+    switch (sort) {
+        case PROC_SORT_MEM: compare = cmp_mem; break;
+        case PROC_SORT_CPU_ASC: compare = cmp_cpu_asc; break;
+        case PROC_SORT_MEM_ASC: compare = cmp_mem_asc; break;
+        case PROC_SORT_CPU:
+        case PROC_SORT_DEFAULT: break;
+    }
+    qsort(procs, (size_t)count, sizeof(*procs), compare);
 }
 
 int proclist_sample_ex(proc_info_t *out, int max, proc_sort_t sort,
@@ -185,10 +222,8 @@ int proclist_sample_ex(proc_info_t *out, int max, proc_sort_t sort,
     }
     free(pids);
 
-    /* 先排整张表——排之前就截断的话，留下的只会是 pid 最小的那些，而不是
-       最忙的那些。 */
-    qsort(snapshot, (size_t)n, sizeof(proc_info_t),
-          sort == PROC_SORT_MEM ? cmp_mem : cmp_cpu);
+    /* 先排整张表，再截取所选方向的前 max 项。 */
+    proclist_sort(snapshot, n, sort);
 
     if (total_out)
         *total_out = n;

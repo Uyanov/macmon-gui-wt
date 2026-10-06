@@ -18,6 +18,8 @@ struct monitor_core {
     int started;
     int wake;
     int smc_opened;
+    network_sampler_t *network;
+    uint64_t network_epoch;
 };
 
 static double clamp_interval(double interval)
@@ -60,8 +62,17 @@ static void sample_once(monitor_core_t *core)
     next = core->snapshot;
     pthread_mutex_unlock(&core->mutex);
 
+    if (core->network_epoch != next.sampling_epoch) {
+        network_reset(core->network);
+        core->network_epoch = next.sampling_epoch;
+    }
+    network_sample(core->network, &next.network);
+    smc_temperature(&next.temperature);
+
     previous_cpu_valid = next.sequence != 0;
     stale = 0;
+    if (next.network.status == NETWORK_ERROR) stale |= CORE_STALE_NET;
+    if (next.temperature.status == TEMPERATURE_ERROR) stale |= CORE_STALE_TEMP;
 
     if (sysinfo_cpu(&next.cpu) != 0) {
         stale |= CORE_STALE_CPU;
@@ -105,11 +116,19 @@ static void sample_once(monitor_core_t *core)
         history_push(&next, next.cpu.busy);
     next.stale_mask = stale;
     next.sequence++;
+    struct timespec sampled;
+    clock_gettime(CLOCK_MONOTONIC, &sampled);
+    next.sampled_at = sampled.tv_sec + sampled.tv_nsec / 1e9;
 
     pthread_mutex_lock(&core->mutex);
     next.interval = core->snapshot.interval;
     next.sort = core->snapshot.sort;
     next.paused = core->snapshot.paused;
+    if (next.sampling_epoch != core->snapshot.sampling_epoch) {
+        /* 丢弃跨过暂停/恢复边界的在途读数。 */
+        pthread_mutex_unlock(&core->mutex);
+        return;
+    }
     core->snapshot = next;
     pthread_mutex_unlock(&core->mutex);
 }
@@ -126,6 +145,17 @@ static void *sampling_thread(void *arg)
             core->wake = 0;
             while (core->running && core->snapshot.paused && !core->wake)
                 pthread_cond_wait(&core->cond, &core->mutex);
+            if (core->running && !core->snapshot.paused) {
+                pthread_mutex_unlock(&core->mutex);
+                sample_once(core);
+                pthread_mutex_lock(&core->mutex);
+            }
+            continue;
+        }
+        if (core->network_epoch != core->snapshot.sampling_epoch) {
+            pthread_mutex_unlock(&core->mutex);
+            sample_once(core);
+            pthread_mutex_lock(&core->mutex);
             continue;
         }
         const double interval = core->snapshot.interval;
@@ -136,8 +166,9 @@ static void *sampling_thread(void *arg)
                 break;
         }
         const int should_sample = core->running && !core->snapshot.paused;
+        const int running = core->running;
         pthread_mutex_unlock(&core->mutex);
-        if (!core->running)
+        if (!running)
             break;
         if (should_sample)
             sample_once(core);
@@ -152,6 +183,8 @@ monitor_core_t *core_create(double interval, proc_sort_t sort)
     monitor_core_t *core = calloc(1, sizeof(*core));
     if (!core)
         return NULL;
+    core->network = network_create();
+    if (!core->network) { free(core); return NULL; }
     pthread_mutex_init(&core->mutex, NULL);
     pthread_cond_init(&core->cond, NULL);
     core->snapshot.interval = clamp_interval(interval);
@@ -196,6 +229,7 @@ void core_destroy(monitor_core_t *core)
     if (!core)
         return;
     core_stop(core);
+    network_destroy(core->network);
     pthread_cond_destroy(&core->cond);
     pthread_mutex_destroy(&core->mutex);
     free(core);
@@ -220,6 +254,7 @@ void core_set_paused(monitor_core_t *core, int paused)
 {
     if (!core) return;
     pthread_mutex_lock(&core->mutex);
+    if (core->snapshot.paused && !paused) core->snapshot.sampling_epoch++;
     core->snapshot.paused = paused != 0;
     wake_core(core);
     pthread_mutex_unlock(&core->mutex);

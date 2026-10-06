@@ -5,6 +5,7 @@
 - [项目说明与使用方式](../README.md)
 - [领域术语表](../GLOSSARY.md)
 - [更新记录](../CHANGELOG.txt)
+- [1.1.0 逐文件改动与交付说明](releases/1.1.0.md)
 - [ADR-0001：推模型采样快照](adr/0001-snapshot-core.md)
 - [ADR-0002：AppKit 原生前端](adr/0002-appkit-frontend.md)
 - [ADR-0003：GUI 数据卡片的历史与视觉边界](adr/0003-gui-card-history.md)
@@ -16,7 +17,8 @@
 - [领域文档约定](agents/domain.md)
 - [现代化改造 spec](../.scratch/modernization/spec.md)
 - [现代化改造 tickets](../.scratch/modernization/issues/)
-- [run-macmon 测试技能](../.claude/skills/run-macmon/SKILL.md)
+- [扩展指标 spec](../.scratch/extended-metrics/spec.md)
+- [GUI 进程排序 spec](../.scratch/gui-process-sorting/spec.md)
 
 ## 审计与历史资料
 

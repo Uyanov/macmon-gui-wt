@@ -1,12 +1,14 @@
-#include "smc.h"
+#include "smc_internal.h"
 
 #include <IOKit/IOKitLib.h>
 #include <mach/mach.h>
 #include <stdio.h>
 #include <string.h>
+#include <math.h>
+#include <sys/sysctl.h>
 
 /*
- * 风扇转速是 macOS 唯一一个不通过任何公开 API 暴露的东西。唯一的入口是
+ * 风扇转速和 CPU 温度通过 AppleSMC 的只读请求获取。这里使用的入口是
  * AppleSMC 用户客户端，而它的请求结构体没有任何文档——所以下面这些结构体
  * 是手写出来的。IOConnectCallStructMethod 是原样转发这段内存的，这使字段
  * 顺序成为 ABI 的一部分：改动或重排，内核侧读到的就是垃圾。
@@ -113,11 +115,11 @@ static int smc_read(const char *key, uint32_t *type, uint32_t *size,
 }
 
 /*
- * 数值有两种编码，而且同一台机器上可以混用——风扇当前转速和它的上下限
+ * 数值有多种编码，而且同一台机器上可以混用——风扇当前转速和它的上下限
  * 未必一致。所以要按 key 自己声明的类型解码，不能统一假设成某一种。
  */
-static int decode_number(uint32_t type, uint32_t size, const smc_bytes_t bytes,
-                         double *out)
+int smc_decode_number(uint32_t type, uint32_t size, const smc_bytes_t bytes,
+                      double *out)
 {
     char t[5];
 
@@ -127,11 +129,15 @@ static int decode_number(uint32_t type, uint32_t size, const smc_bytes_t bytes,
         float f;
         memcpy(&f, bytes, 4);   /* Intel 和 Apple Silicon 上都是小端 */
         *out = (double)f;
-        return 0;
+        return isfinite(*out) ? 0 : -1;
     }
     if (memcmp(t, "fpe2", 4) == 0 && size == 2) {
         *out = (double)(((unsigned int)(unsigned char)bytes[0] << 6)
                         | ((unsigned char)bytes[1] >> 2));
+        return 0;
+    }
+    if (memcmp(t, "sp78", 4) == 0 && size == 2) {
+        *out = (double)(int8_t)bytes[0] + (unsigned char)bytes[1] / 256.0;
         return 0;
     }
     return -1;
@@ -208,11 +214,11 @@ int smc_fans(fan_info_t *out)
             char key[8];
             snprintf(key, sizeof(key), "F%dMn", i);
             if (smc_read(key, &type, &size, bytes) != 0
-                    || decode_number(type, size, bytes, &fan_limits.min_rpm[i]) != 0)
+                    || smc_decode_number(type, size, bytes, &fan_limits.min_rpm[i]) != 0)
                 return -1;
             snprintf(key, sizeof(key), "F%dMx", i);
             if (smc_read(key, &type, &size, bytes) != 0
-                    || decode_number(type, size, bytes, &fan_limits.max_rpm[i]) != 0)
+                    || smc_decode_number(type, size, bytes, &fan_limits.max_rpm[i]) != 0)
                 return -1;
         }
         fan_limits_valid = 1;
@@ -226,7 +232,7 @@ int smc_fans(fan_info_t *out)
 
         snprintf(key, sizeof(key), "F%dAc", i);
         if (smc_read(key, &type, &size, bytes) != 0
-                || decode_number(type, size, bytes, &value) != 0) {
+                || smc_decode_number(type, size, bytes, &value) != 0) {
             memset(out, 0, sizeof(*out));
             return -1;
         }
@@ -234,4 +240,82 @@ int smc_fans(fan_info_t *out)
 
     }
     return 0;
+}
+
+void smc_read_temperature(smc_reader_t reader, void *context, const char *core_key,
+                         temperature_info_t *out)
+{
+    const temperature_info_t previous = *out;
+    const int previously_available = previous.key[0] != '\0';
+    const char *keys[] = {"TCAD", "TC0D", core_key, "TC0E", "TC0F", "TC0P"};
+    const temperature_source_t sources[] = {TEMPERATURE_PACKAGE, TEMPERATURE_DIODE,
+        TEMPERATURE_CORE, TEMPERATURE_VIRTUAL, TEMPERATURE_FILTERED, TEMPERATURE_PROXIMITY};
+    *out = (temperature_info_t){.celsius = NAN, .status = previously_available ? TEMPERATURE_ERROR : TEMPERATURE_UNAVAILABLE};
+    if (previously_available) {
+        out->source = previous.source;
+        memcpy(out->key, previous.key, sizeof(out->key));
+    }
+    for (size_t i = 0; i < sizeof(keys) / sizeof(keys[0]); i++) {
+        if (!keys[i]) continue;
+        char bytes[32] = {0};
+        uint32_t type = 0, size = 0;
+        double value;
+        if (reader(context, keys[i], &type, &size, bytes) == 0 &&
+            smc_decode_number(type, size, bytes, &value) == 0 && value > -40 && value < 150) {
+            out->celsius = value;
+            out->source = sources[i];
+            out->status = TEMPERATURE_OK;
+            memcpy(out->key, keys[i], 4);
+            return;
+        }
+    }
+}
+
+static int temperature_reader(void *context, const char *key, uint32_t *type,
+                              uint32_t *size, char bytes[32])
+{
+    (void)context;
+    return smc_read(key, type, size, bytes);
+}
+
+void smc_temperature(temperature_info_t *out)
+{
+    if (!opened) { *out = (temperature_info_t){.status = TEMPERATURE_UNAVAILABLE}; return; }
+    const char *core_key = NULL;
+#if defined(__arm64__)
+    /* 已有开源 CPU 传感器映射中的单个代表核心，不猜测其他芯片的键。 */
+    char brand[128] = {0};
+    size_t length = sizeof(brand);
+    if (sysctlbyname("machdep.cpu.brand_string", brand, &length, NULL, 0) == 0) {
+        if (strncmp(brand, "Apple M1", 8) == 0 && (brand[8] == ' ' || brand[8] == '\0')) core_key = "Tp09";
+        else if (strncmp(brand, "Apple M2", 8) == 0 && (brand[8] == ' ' || brand[8] == '\0')) core_key = "Tp1h";
+        else if (strncmp(brand, "Apple M3", 8) == 0 && (brand[8] == ' ' || brand[8] == '\0')) core_key = "Te05";
+        else if (strncmp(brand, "Apple M4", 8) == 0 && (brand[8] == ' ' || brand[8] == '\0')) core_key = "Te05";
+        else if (strncmp(brand, "Apple M5", 8) == 0 && (brand[8] == ' ' || brand[8] == '\0')) core_key = "Tp00";
+    }
+#endif
+    smc_read_temperature(temperature_reader, NULL, core_key, out);
+}
+
+const char *smc_temperature_source_text(temperature_source_t source)
+{
+    switch (source) {
+    case TEMPERATURE_PACKAGE: return "CPU 封装温度";
+    case TEMPERATURE_DIODE: return "CPU 二极管温度";
+    case TEMPERATURE_VIRTUAL: return "CPU 虚拟二极管温度";
+    case TEMPERATURE_FILTERED: return "CPU 过滤二极管温度";
+    case TEMPERATURE_PROXIMITY: return "CPU 邻近温度";
+    case TEMPERATURE_CORE: return "CPU 代表核心温度";
+    }
+    return "来源未知";
+}
+
+const char *smc_temperature_status_text(temperature_status_t status)
+{
+    switch (status) {
+    case TEMPERATURE_OK: return "实时温度";
+    case TEMPERATURE_ERROR: return "读取失败";
+    case TEMPERATURE_UNAVAILABLE: return "不支持或不可用";
+    }
+    return "不可用";
 }

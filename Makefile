@@ -4,7 +4,7 @@ CC      = clang
 # 用 gnu11 而不是 c11：我们需要的那几个 POSIX 接口（clock_gettime、
 # localtime_r、getloadavg、statfs）在 __STRICT_ANSI__ 下会被藏起来。
 CFLAGS  ?= -std=gnu11 -O2 -g -Wall -Wextra -mmacosx-version-min=12.0
-LDLIBS  := -lncurses -framework IOKit -framework CoreFoundation -lpthread
+LDLIBS  := -lncurses -framework IOKit -framework CoreFoundation -framework SystemConfiguration -lpthread
 
 SRCDIR  := src
 OBJDIR  := build
@@ -30,18 +30,23 @@ $(OBJDIR):
 # macOS 的 .app 是一个结构固定的目录。当前入口是 AppKit GUI；TUI 仍由根目录的
 # macmon 二进制提供，供终端用户直接运行。
 
-VERSION  := 1.0.0
-BUILD    := 1
+VERSION  := 1.1.0
+BUILD    := 2
 APP      := MacMonitor.app
 CONTENTS := $(APP)/Contents
 
 # 通用二进制：本机是 Intel，但做出来的 .app 拿到 Apple Silicon 上也该能跑。
 # 单独用一份目标文件，免得把默认的 make 产物也变成胖二进制。
 ARCHES   := -arch x86_64 -arch arm64
-CORE_SRCS := $(SRCDIR)/core.c $(SRCDIR)/proclist.c $(SRCDIR)/smc.c $(SRCDIR)/sysinfo.c
+CORE_SRCS := $(SRCDIR)/core.c $(SRCDIR)/proclist.c $(SRCDIR)/smc.c $(SRCDIR)/sysinfo.c $(SRCDIR)/network.c $(SRCDIR)/history.c
 UNIOBJS  := $(CORE_SRCS:$(SRCDIR)/%.c=$(OBJDIR)/universal/%.o)
 GUIOBJ   := $(OBJDIR)/universal/gui.o
+UNITUIOBJS := $(OBJDIR)/universal/main.o $(OBJDIR)/universal/ui.o
+UNITUIBIN := $(OBJDIR)/universal/macmon
 APPICON  := $(CONTENTS)/Resources/MacMonitor.icns
+RELEASE_NAME := MacMonitor-$(VERSION)-macos-universal
+RELEASE_STAGE := $(OBJDIR)/release/$(RELEASE_NAME)
+RELEASE_DIR := releases/$(VERSION)
 
 app: $(APP)
 
@@ -68,7 +73,7 @@ $(CONTENTS)/MacOS/MacMonitor: $(GUIOBJ) $(UNIOBJS)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) $(ARCHES) -fobjc-arc -o $@ $(GUIOBJ) $(UNIOBJS) $(LDLIBS) -framework Cocoa
 
-$(CONTENTS)/Info.plist: packaging/Info.plist
+$(CONTENTS)/Info.plist: packaging/Info.plist Makefile
 	@mkdir -p $(dir $@)
 	sed -e 's/@VERSION@/$(VERSION)/g' -e 's/@BUILD@/$(BUILD)/g' $< > $@
 
@@ -80,6 +85,21 @@ $(APPICON): packaging/make-icon.py
 	@mkdir -p $(dir $@)
 	python3 $< $(OBJDIR)/MacMonitor.iconset
 	iconutil -c icns $(OBJDIR)/MacMonitor.iconset -o $@
+
+# 成品同时包含通用架构 GUI 与 TUI，说明和校验值与压缩包一起交付。
+$(UNITUIBIN): $(UNITUIOBJS) $(UNIOBJS)
+	$(CC) $(CFLAGS) $(ARCHES) -o $@ $^ $(LDLIBS)
+	codesign --force --sign - --timestamp=none $@
+
+release: app $(UNITUIBIN)
+	rm -rf "$(RELEASE_STAGE)"
+	mkdir -p "$(RELEASE_STAGE)" "$(RELEASE_DIR)"
+	ditto "$(APP)" "$(RELEASE_STAGE)/$(APP)"
+	cp "$(UNITUIBIN)" "$(RELEASE_STAGE)/macmon"
+	cp packaging/使用说明.txt "$(RELEASE_STAGE)/使用说明.txt"
+	cp CHANGELOG.txt "$(RELEASE_STAGE)/更新日志.txt"
+	ditto -c -k --sequesterRsrc --keepParent "$(RELEASE_STAGE)" "$(RELEASE_DIR)/$(RELEASE_NAME).zip"
+	cd "$(RELEASE_DIR)" && shasum -a 256 "$(RELEASE_NAME).zip" > SHA256SUMS.txt
 
 # AddressSanitizer + UndefinedBehaviorSanitizer。macOS 上没有 LeakSanitizer：
 # ASAN_OPTIONS=detect_leaks=1 不会去查泄漏，而是让程序在启动那一刻直接中止。
@@ -97,22 +117,35 @@ $(SANBIN): $(SRCS)
 # 核心采样模块与 sysinfo 一起直接链接，测试不经过 TUI 层。
 TESTBIN  := $(OBJDIR)/test_macmon
 TESTSRCS := $(wildcard tests/*.c)
-TESTDEPS := $(SRCDIR)/sysinfo.c $(SRCDIR)/proclist.c $(SRCDIR)/smc.c $(SRCDIR)/core.c
+TESTDEPS := $(CORE_SRCS)
 
 test: $(TESTBIN)
 	@./$(TESTBIN)
 
-$(TESTBIN): $(TESTSRCS) $(TESTDEPS) | $(OBJDIR)
+test-tui: $(BIN)
+	python3 tests/test_tui.py
+
+$(TESTBIN): $(TESTSRCS) $(TESTDEPS) $(wildcard $(SRCDIR)/*.h) | $(OBJDIR)
 	$(CC) $(CFLAGS) -I$(SRCDIR) -o $@ $(TESTSRCS) $(TESTDEPS) $(LDLIBS)
 
 # AppKit 测试需要已登录的图形会话，覆盖真正的窗口关闭与事件池清理。
 GUITESTBIN := $(OBJDIR)/test_gui_lifecycle
-test-gui: $(GUITESTBIN)
+GUIMETRICSTESTBIN := $(OBJDIR)/test_gui_metrics
+GUISORTTESTBIN := $(OBJDIR)/test_gui_sorting
+test-gui: $(GUITESTBIN) $(GUIMETRICSTESTBIN) $(GUISORTTESTBIN)
 	./$(GUITESTBIN) close 0.1
 	./$(GUITESTBIN) close 1.2
 	./$(GUITESTBIN) drain 0.1
 	./$(GUITESTBIN) drain 1.2
 	./$(GUITESTBIN) quit 1.2
+	./$(GUIMETRICSTESTBIN)
+	./$(GUISORTTESTBIN)
+
+$(GUISORTTESTBIN): tests/test_gui_sorting.m $(SRCDIR)/gui.m $(wildcard $(SRCDIR)/*.h) $(UNIOBJS)
+	$(CC) $(CFLAGS) -fobjc-arc -I$(SRCDIR) -o $@ $< $(UNIOBJS) $(LDLIBS) -framework Cocoa
+
+$(GUIMETRICSTESTBIN): tests/test_gui_metrics.m $(SRCDIR)/gui.m $(wildcard $(SRCDIR)/*.h) $(UNIOBJS)
+	$(CC) $(CFLAGS) -fobjc-arc -I$(SRCDIR) -o $@ $< $(UNIOBJS) $(LDLIBS) -framework Cocoa
 
 $(GUITESTBIN): tests/test_gui_lifecycle.m $(SRCDIR)/gui.m $(wildcard $(SRCDIR)/*.h) $(UNIOBJS)
 	$(CC) $(CFLAGS) -fobjc-arc -I$(SRCDIR) -o $@ $< $(UNIOBJS) $(LDLIBS) -framework Cocoa
@@ -120,6 +153,6 @@ $(GUITESTBIN): tests/test_gui_lifecycle.m $(SRCDIR)/gui.m $(wildcard $(SRCDIR)/*
 clean:
 	rm -rf $(OBJDIR) $(BIN) $(APP) $(SANBIN)
 
-.PHONY: all app clean sanitize test test-gui
+.PHONY: all app release clean sanitize test test-gui test-tui
 
--include $(DEPS) $(UNIOBJS:.o=.d) $(GUIOBJ:.o=.d)
+-include $(DEPS) $(UNIOBJS:.o=.d) $(GUIOBJ:.o=.d) $(UNITUIOBJS:.o=.d)

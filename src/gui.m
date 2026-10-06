@@ -1,5 +1,6 @@
 #import <Cocoa/Cocoa.h>
 #include "core.h"
+#include "history.h"
 #include <math.h>
 
 enum {
@@ -7,6 +8,8 @@ enum {
     METRIC_MEMORY,
     METRIC_SWAP,
     METRIC_DISK,
+    METRIC_NETWORK,
+    METRIC_TEMPERATURE,
     METRIC_COUNT,
 };
 
@@ -211,6 +214,8 @@ typedef NS_ENUM(NSInteger, CardIconKind) {
     CardIconProcesses,
     CardIconUptime,
     CardIconFan,
+    CardIconNetwork,
+    CardIconTemperature,
 };
 
 /* 资源颜色用于识别指标，橙色和红色仍用于提示异常。 */
@@ -224,6 +229,8 @@ static NSColor *CardAccentColor(CardIconKind kind) {
     case CardIconProcesses: return NSColor.systemTealColor;
     case CardIconUptime: return NSColor.systemIndigoColor;
     case CardIconFan: return NSColor.systemPurpleColor;
+    case CardIconNetwork: return NSColor.systemTealColor;
+    case CardIconTemperature: return NSColor.systemOrangeColor;
     }
     return NSColor.controlAccentColor;
 }
@@ -278,9 +285,10 @@ static NSColor *CardAccentColor(CardIconKind kind) {
 
 - (void)setKind:(CardIconKind)kind severity:(UISeverity)severity {
     NSArray<NSString *> *symbols = @[@"cpu", @"memorychip", @"arrow.left.arrow.right",
-        @"internaldrive", @"waveform.path", @"list.bullet.rectangle", @"clock", @"fanblades"];
+        @"internaldrive", @"waveform.path", @"list.bullet.rectangle", @"clock", @"fanblades",
+        @"network", @"thermometer"];
     NSArray<NSString *> *labels = @[@"CPU", @"内存", @"交换空间", @"磁盘",
-        @"系统负载", @"进程数量", @"运行时间", @"风扇转速"];
+        @"系统负载", @"进程数量", @"运行时间", @"风扇转速", @"网络吞吐量", @"CPU 温度"];
     NSImage *image = [NSImage imageWithSystemSymbolName:symbols[kind]
                               accessibilityDescription:labels[kind]];
     self.image = [image imageWithSymbolConfiguration:
@@ -301,6 +309,9 @@ static NSColor *CardAccentColor(CardIconKind kind) {
 @property(nonatomic) double maximumValue;
 @property(nonatomic, copy) NSString *emptyText;
 @property(nonatomic) BOOL durationStyle;
+@property(nonatomic, copy) NSArray<NSNumber *> *times;
+@property(nonatomic, copy) NSArray<NSArray<NSNumber *> *> *breaks;
+@property(nonatomic) double windowEnd;
 - (void)setValues:(NSArray<NSNumber *> *)values
           minimum:(double)minimum
           maximum:(double)maximum
@@ -342,6 +353,8 @@ static NSColor *CardAccentColor(CardIconKind kind) {
           maximum:(double)maximum
         emptyText:(NSString *)emptyText {
     _series = [series copy] ?: @[];
+    _times = @[];
+    _breaks = @[];
     _minimumValue = minimum;
     _maximumValue = maximum;
     _emptyText = [emptyText copy] ?: @"暂无历史";
@@ -431,27 +444,39 @@ static NSColor *CardAccentColor(CardIconKind kind) {
         NSPoint firstPoint = NSZeroPoint;
         NSPoint lastPoint = NSZeroPoint;
         BOOL hasPoint = NO;
+        BOOL segmentStarted = NO;
+        BOOL continuous = YES;
         for (NSUInteger i = 0; i < values.count; i++) {
             double raw = values[i].doubleValue;
-            if (!isfinite(raw))
+            if (!isfinite(raw)) {
+                segmentStarted = NO;
+                continuous = NO;
                 continue;
+            }
             double normalized = (raw - minimum) / (maximum - minimum);
             normalized = MIN(1.0, MAX(0.0, normalized));
             CGFloat x = NSMinX(bounds) + (values.count == 1 ? width / 2.0
                                                    : width * i / (values.count - 1));
+            if (self.times.count == values.count)
+                x = NSMinX(bounds) + width * MIN(1.0, MAX(0.0,
+                    (self.times[i].doubleValue - self.windowEnd + METRIC_HISTORY_SECONDS) / METRIC_HISTORY_SECONDS));
             CGFloat y = NSMinY(bounds) + height * normalized;
             NSPoint point = NSMakePoint(x, y);
-            if (!hasPoint) {
-                firstPoint = point;
+            BOOL breakBefore = seriesIndex < self.breaks.count && i < self.breaks[seriesIndex].count &&
+                self.breaks[seriesIndex][i].boolValue;
+            if (breakBefore) continuous = NO;
+            if (!hasPoint) firstPoint = point;
+            if (!segmentStarted || breakBefore) {
                 [line moveToPoint:point];
             } else
                 [line lineToPoint:point];
             lastPoint = point;
             hasPoint = YES;
+            segmentStarted = YES;
         }
         if (!hasPoint)
             continue;
-        if (self.series.count == 1 && values.count > 1) {
+        if (continuous && self.series.count == 1 && values.count > 1) {
             NSBezierPath *area = [line copy];
             [area lineToPoint:NSMakePoint(lastPoint.x, NSMinY(bounds))];
             [area lineToPoint:NSMakePoint(firstPoint.x, NSMinY(bounds))];
@@ -483,6 +508,7 @@ static NSColor *CardAccentColor(CardIconKind kind) {
                 minimum:(double)minimum
                 maximum:(double)maximum
               emptyText:(NSString *)emptyText;
+- (void)setTimedHistory:(const metric_history_t *)history network:(BOOL)network emptyText:(NSString *)text;
 @end
 
 @implementation MetricCardView {
@@ -532,6 +558,10 @@ static NSColor *CardAccentColor(CardIconKind kind) {
         _valueLabel.textColor = [NSColor labelColor];
         _valueLabel.alignment = NSTextAlignmentLeft;
         _valueLabel.lineBreakMode = NSLineBreakByTruncatingTail;
+        if (kind == CardIconNetwork) {
+        _valueLabel.font = [NSFont monospacedDigitSystemFontOfSize:16 weight:NSFontWeightSemibold];
+            _valueLabel.maximumNumberOfLines = 2;
+        }
 
         _progress = [[ResourceMeterView alloc] initWithFrame:NSZeroRect];
         _progress.color = CardAccentColor(kind);
@@ -595,7 +625,7 @@ static NSColor *CardAccentColor(CardIconKind kind) {
     [_icon setKind:_kind severity:severity];
     self.borderColor = severity == UISeverityNormal ? NSColor.separatorColor
         : [color colorWithAlphaComponent:0.4];
-    self.accessibilityLabel = [NSString stringWithFormat:@"%@ %@，%@", _metricTitle, value, state];
+    self.accessibilityLabel = [NSString stringWithFormat:@"%@ %@，%@，%@", _metricTitle, value, detail, state];
 }
 
 - (void)setChartValues:(NSArray<NSNumber *> *)values
@@ -603,6 +633,37 @@ static NSColor *CardAccentColor(CardIconKind kind) {
                 maximum:(double)maximum
               emptyText:(NSString *)emptyText {
     [_sparkline setValues:values minimum:minimum maximum:maximum emptyText:emptyText];
+}
+
+- (void)setTimedHistory:(const metric_history_t *)history network:(BOOL)network emptyText:(NSString *)text {
+    NSMutableArray *times = [NSMutableArray array];
+    NSMutableArray *series = [NSMutableArray array];
+    NSMutableArray *breaks = [NSMutableArray array];
+    BOOL hasValid = NO;
+    double minimum = 0, maximum = network ? NAN : 120;
+    for (int metric = network ? HISTORY_DOWNLOAD : HISTORY_TEMPERATURE;
+         metric <= (network ? HISTORY_UPLOAD : HISTORY_TEMPERATURE); metric++) {
+        NSMutableArray *values = [NSMutableArray array];
+        NSMutableArray *gaps = [NSMutableArray array];
+        for (size_t i = 0; i < history->count; i++) {
+            [values addObject:@(history->points[i].values[metric])];
+            [gaps addObject:@((history->points[i].breaks & (1u << metric)) != 0)];
+            if (isfinite(history->points[i].values[metric])) {
+                hasValid = YES;
+                minimum = MIN(minimum, history->points[i].values[metric]);
+                if (!network) maximum = MAX(maximum, history->points[i].values[metric]);
+            }
+        }
+        [series addObject:values];
+        [breaks addObject:gaps];
+    }
+    for (size_t i = 0; i < history->count; i++) [times addObject:@(history->points[i].time)];
+    [_sparkline setSeries:hasValid ? series : @[] minimum:minimum maximum:maximum emptyText:text];
+    _sparkline.times = times;
+    _sparkline.breaks = breaks;
+    _sparkline.windowEnd = history->count ? history->points[history->count - 1].time : 0;
+    _sparkline.strokeColors = network ? @[NSColor.systemBlueColor, NSColor.systemGreenColor] : @[];
+    _sparkline.accessibilityLabel = network ? @"最近 60 秒，蓝色下载，绿色上传" : @"最近 60 秒 CPU 温度，单位摄氏度";
 }
 
 @end
@@ -797,6 +858,7 @@ static NSColor *CardAccentColor(CardIconKind kind) {
 @property(nonatomic) NSMutableArray<NSNumber *> *load15History;
 @property(nonatomic) NSMutableArray<NSNumber *> *processHistory;
 @property(nonatomic) NSMutableArray<NSNumber *> *fanHistory;
+@property(nonatomic) metric_history_t extendedHistory;
 @end
 
 @implementation MacMonitorApp
@@ -936,18 +998,29 @@ static NSColor *CardAccentColor(CardIconKind kind) {
     };
     for (NSTableColumn *column in self.table.tableColumns) {
         NSString *title = titles[column.identifier] ?: column.identifier;
-        if ((self.sort == PROC_SORT_MEM && [column.identifier isEqualToString:@"mem"]) ||
-            (self.sort == PROC_SORT_CPU && [column.identifier isEqualToString:@"cpu"]))
-            title = [title stringByAppendingString:@" ↓"];
+        BOOL ascending = self.sort == PROC_SORT_CPU_ASC || self.sort == PROC_SORT_MEM_ASC;
+        BOOL memory = self.sort == PROC_SORT_MEM || self.sort == PROC_SORT_MEM_ASC;
+        if (self.sort != PROC_SORT_DEFAULT &&
+            [column.identifier isEqualToString:memory ? @"mem" : @"cpu"])
+            title = [title stringByAppendingString:ascending ? @" ↑" : @" ↓"];
         column.title = title;
+        if ([column.identifier isEqualToString:@"cpu"] || [column.identifier isEqualToString:@"mem"])
+            column.headerToolTip = @"点击切换：↓ 从大到小 → ↑ 从小到大 → 默认排序";
     }
-    self.processSectionHint.stringValue = self.sort == PROC_SORT_MEM
-        ? @"按内存占用排序" : @"按 CPU 占用排序";
+    NSString *hint = @"默认排序";
+    if (self.sort != PROC_SORT_DEFAULT) {
+        BOOL memory = self.sort == PROC_SORT_MEM || self.sort == PROC_SORT_MEM_ASC;
+        BOOL ascending = self.sort == PROC_SORT_CPU_ASC || self.sort == PROC_SORT_MEM_ASC;
+        hint = [NSString stringWithFormat:@"%@占用从%@到%@", memory ? @"内存" : @"CPU ",
+            ascending ? @"小" : @"大", ascending ? @"大" : @"小"];
+    }
+    self.processSectionHint.stringValue = (_snapshot.stale_mask & CORE_STALE_PROC)
+        ? [hint stringByAppendingString:@" · 数据陈旧"] : hint;
 }
 
 - (void)applicationDidFinishLaunching:(NSNotification *)note {
     (void)note;
-    self.sort = PROC_SORT_CPU;
+    self.sort = PROC_SORT_DEFAULT;
     self.core = core_create(1.0, self.sort);
     if (!self.core || core_start(self.core) != 0) {
         NSAlert *alert = [[NSAlert alloc] init];
@@ -1041,13 +1114,14 @@ static NSColor *CardAccentColor(CardIconKind kind) {
     self.metricCards = [NSMutableArray arrayWithCapacity:METRIC_COUNT];
     NSArray *metricSpecs = @[
         @[@"CPU", @(CardIconCPU)], @[@"内存", @(CardIconMemory)],
-        @[@"交换空间", @(CardIconSwap)], @[@"磁盘", @(CardIconDisk)]
+        @[@"交换空间", @(CardIconSwap)], @[@"磁盘", @(CardIconDisk)],
+        @[@"网络吞吐量", @(CardIconNetwork)], @[@"CPU 温度", @(CardIconTemperature)]
     ];
     for (NSArray *spec in metricSpecs)
         [self.metricCards addObject:[[MetricCardView alloc] initWithTitle:spec[0]
                                                                        kind:[spec[1] integerValue]]];
     AdaptiveGridView *metrics = [[AdaptiveGridView alloc]
-        initWithItems:self.metricCards wideColumns:4 compactColumns:2 compactThreshold:900
+        initWithItems:self.metricCards wideColumns:3 compactColumns:2 compactThreshold:900
         itemHeight:166 spacing:12 columnSpacing:12];
     [root addArrangedSubview:metrics];
 
@@ -1070,7 +1144,7 @@ static NSColor *CardAccentColor(CardIconKind kind) {
     NSTextField *processTitle = [self sectionLabel:@"进程列表"];
     [processTitle setContentHuggingPriority:NSLayoutPriorityRequired
                                      forOrientation:NSLayoutConstraintOrientationHorizontal];
-    self.processSectionHint = [self valueLabel:@"按 CPU 占用排序" size:10];
+    self.processSectionHint = [self valueLabel:@"默认排序" size:10];
     self.processSectionHint.alignment = NSTextAlignmentLeft;
     [self.processSectionHint setContentHuggingPriority:NSLayoutPriorityRequired
                                                 forOrientation:NSLayoutConstraintOrientationHorizontal];
@@ -1155,10 +1229,37 @@ static NSColor *CardAccentColor(CardIconKind kind) {
         selector:@selector(refresh:) userInfo:nil repeats:YES];
 }
 
+- (void)refreshExtendedMetrics {
+    metric_history_record(&_extendedHistory, &_snapshot);
+    char download[32], upload[32];
+    network_format_rate(_snapshot.network.download, download, sizeof(download));
+    network_format_rate(_snapshot.network.upload, upload, sizeof(upload));
+    BOOL networkAvailable = _snapshot.network.status == NETWORK_OK;
+    NSString *networkState = [NSString stringWithUTF8String:network_status_text(_snapshot.network.status)];
+    NSString *networkValue = networkAvailable ? [NSString stringWithFormat:@"下载 %s\n上传 %s", download, upload] : networkState;
+    [self.metricCards[METRIC_NETWORK] setPercent:0 value:networkValue
+        detail:@"实体接口 · 60 秒 · 蓝下载／绿上传" state:networkAvailable ? @"实时" : @"暂无读数"
+        severity:networkAvailable ? UISeverityNormal : (_snapshot.network.status == NETWORK_ERROR ? UISeverityWarning : UISeverityNeutral)];
+    BOOL temperatureAvailable = _snapshot.temperature.status == TEMPERATURE_OK;
+    NSString *temperatureState = [NSString stringWithUTF8String:smc_temperature_status_text(_snapshot.temperature.status)];
+    NSString *temperatureValue = temperatureAvailable ? [NSString stringWithFormat:@"%.1f°C", _snapshot.temperature.celsius] : temperatureState;
+    NSString *temperatureDetail = _snapshot.temperature.key[0]
+        ? [NSString stringWithFormat:@"%@ · %s · 60 秒",
+            [NSString stringWithUTF8String:smc_temperature_source_text(_snapshot.temperature.source)], _snapshot.temperature.key]
+        : @"暂无可确认的 CPU 温度来源";
+    [self.metricCards[METRIC_TEMPERATURE] setPercent:0 value:temperatureValue detail:temperatureDetail
+        state:temperatureAvailable ? @"实时" : @"暂无读数"
+        severity:temperatureAvailable ? UISeverityNormal : (_snapshot.temperature.status == TEMPERATURE_ERROR ? UISeverityWarning : UISeverityNeutral)];
+    [self.metricCards[METRIC_NETWORK] setTimedHistory:&_extendedHistory network:YES emptyText:networkState];
+    [self.metricCards[METRIC_TEMPERATURE] setTimedHistory:&_extendedHistory network:NO emptyText:temperatureState];
+
+}
+
 - (void)refresh:(NSTimer *)timer {
     (void)timer;
     if (core_snapshot(self.core, &_snapshot) != 0)
         return;
+    proclist_sort(_snapshot.procs, _snapshot.proc_count, self.sort);
 
     const BOOL cpuStale = (_snapshot.stale_mask & CORE_STALE_CPU) != 0;
     const BOOL memStale = (_snapshot.stale_mask & CORE_STALE_MEM) != 0;
@@ -1225,6 +1326,8 @@ static NSColor *CardAccentColor(CardIconKind kind) {
         state:diskStale ? @"数据陈旧" : (diskSeverity == UISeverityError ? @"高占用"
             : (diskSeverity == UISeverityWarning ? @"注意" : @"正常")) severity:diskSeverity];
 
+    [self refreshExtendedMetrics];
+
     [self recordHistoryForSnapshot:cpuAvailable memoryAvailable:memAvailable
                      swapAvailable:swapAvailable diskAvailable:diskAvailable
                       fanAvailable:fanAvailable];
@@ -1253,11 +1356,11 @@ static NSColor *CardAccentColor(CardIconKind kind) {
         else if (severity == UISeverityWarning && overallSeverity != UISeverityError)
             overallSeverity = UISeverityWarning;
     }
-    if (_snapshot.paused || _snapshot.stale_mask || availableCount < METRIC_COUNT)
+    if (_snapshot.paused || _snapshot.stale_mask || availableCount < METRIC_NETWORK)
         if (overallSeverity != UISeverityError)
             overallSeverity = UISeverityWarning;
     NSString *overallTitle = overallSeverity == UISeverityError
-        ? (availableCount < METRIC_COUNT ? @"部分数据不可用" : @"资源占用较高")
+        ? (availableCount < METRIC_NETWORK ? @"部分数据不可用" : @"资源占用较高")
         : (_snapshot.paused ? @"采样已暂停"
         : (overallSeverity == UISeverityWarning ? @"部分数据需要关注" : @"系统状态正常"));
     NSString *overallDetail = [NSString stringWithFormat:@"%ld/4 项指标可用 · %d 个进程 · %@",
@@ -1302,11 +1405,7 @@ static NSColor *CardAccentColor(CardIconKind kind) {
     self.emptyState.hidden = _snapshot.proc_count > 0;
     if (_snapshot.proc_count == 0)
         self.emptyState.stringValue = processStale ? @"进程数据陈旧，暂时无法显示" : @"暂无进程数据";
-    if (processStale)
-        self.processSectionHint.stringValue = [NSString stringWithFormat:@"%@ · 数据陈旧",
-            self.sort == PROC_SORT_MEM ? @"按内存占用排序" : @"按 CPU 占用排序"];
-    else
-        [self updateTableHeaders];
+    [self updateTableHeaders];
     [self.table reloadData];
 }
 
@@ -1361,9 +1460,14 @@ static NSColor *CardAccentColor(CardIconKind kind) {
     if (![column.identifier isEqualToString:@"mem"] &&
         ![column.identifier isEqualToString:@"cpu"])
         return;
-    self.sort = [column.identifier isEqualToString:@"mem"] ? PROC_SORT_MEM : PROC_SORT_CPU;
+    proc_sort_t descending = [column.identifier isEqualToString:@"mem"] ? PROC_SORT_MEM : PROC_SORT_CPU;
+    proc_sort_t ascending = [column.identifier isEqualToString:@"mem"] ? PROC_SORT_MEM_ASC : PROC_SORT_CPU_ASC;
+    self.sort = self.sort == descending ? ascending
+        : (self.sort == ascending ? PROC_SORT_DEFAULT : descending);
     core_set_sort(self.core, self.sort);
+    proclist_sort(_snapshot.procs, _snapshot.proc_count, self.sort);
     [self updateTableHeaders];
+    [self.table reloadData];
 }
 
 - (void)applicationWillTerminate:(NSNotification *)notification {

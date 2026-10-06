@@ -376,6 +376,7 @@ static void draw_procs(int top, int avail, int cols, const proc_info_t *procs,
 void ui_draw(const cpu_usage_t *cpu, const mem_usage_t *mem,
              const disk_usage_t *disk, const double load[3], long uptime,
              const fan_info_t *fans, const proc_info_t *procs, int nprocs,
+             const network_info_t *network, const temperature_info_t *temperature,
              int total_procs,
              const ui_state_t *st)
 {
@@ -387,9 +388,7 @@ void ui_draw(const cpu_usage_t *cpu, const mem_usage_t *mem,
 
     getmaxyx(stdscr, rows, cols);
     if (rows < 1 || cols < 12) {
-        /* 早退也必须让 ncurses 消化 SIGWINCH，否则放大后会永久冻结。 */
-        resize_term(0, 0);
-        getmaxyx(stdscr, rows, cols);
+        /* 主循环已通过 ui_sync_resize() 消化真实尺寸，早退保留这个尺寸。 */
         erase();
         if (rows > 0 && cols > 0)
             put(rows / 2, 0, "终端太小");
@@ -402,7 +401,7 @@ void ui_draw(const cpu_usage_t *cpu, const mem_usage_t *mem,
      * 进程表头）加上两行进程就放不下了，结果会是一团被裁过的乱码，而不是
      * 同一个界面的缩小版——所以干脆明说。
      */
-    if (rows < 15 + fan_rows || cols < 46) {
+    if (rows < 17 + fan_rows || cols < 46) {
         erase();
         put(rows / 2, 1, "终端太小，请放大窗口");
         refresh();
@@ -481,6 +480,18 @@ void ui_draw(const cpu_usage_t *cpu, const mem_usage_t *mem,
 
     if (fan_rows > 0)
         row = draw_fans(row, width, fans);
+
+    char download[32], upload[32];
+    network_format_rate(network->download, download, sizeof(download));
+    network_format_rate(network->upload, upload, sizeof(upload));
+    if (network->status == NETWORK_OK)
+        snprintf(detail, sizeof(detail), "网络  下载 %s  上传 %s", download, upload);
+    else snprintf(detail, sizeof(detail), "网络  %s", network_status_text(network->status));
+    put(row++, 1, detail);
+    if (temperature->status == TEMPERATURE_OK)
+        snprintf(detail, sizeof(detail), "温度  %.1f°C", temperature->celsius);
+    else snprintf(detail, sizeof(detail), "温度  %s", smc_temperature_status_text(temperature->status));
+    put(row++, 1, detail);
 
     row++;                              /* 空行 */
     draw_history(row++, cols, st);

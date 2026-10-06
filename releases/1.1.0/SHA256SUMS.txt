@@ -1,0 +1,1 @@
+bba852a0fc3c6e7577da7423ba40bf111af293dad3c715de8f0b61b14594e660  MacMonitor-1.1.0-macos-universal.zip

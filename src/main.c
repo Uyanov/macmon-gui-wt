@@ -66,8 +66,8 @@ static int handle_key(int ch, ui_state_t *st, monitor_core_t *core, int *dirty)
         *dirty = 1;
         break;
     case KEY_RESIZE:
-        /* 在暂停时没有采样触发 refresh，主动让 ncurses 读取新的 pty 尺寸。 */
-        resizeterm(0, 0);
+        /* 暂停时也使用真实 pty 尺寸，零尺寸请求会丢失极窄窗口的内容。 */
+        ui_sync_resize();
         ui_repaint();
         *dirty = 1;
         break;
@@ -138,7 +138,7 @@ int main(void)
         if (dirty && now >= next_frame && drawn_sequence != 0) {
             ui_draw(&snap.cpu, &snap.mem, &snap.disk, snap.load, snap.uptime,
                     snap.has_fans ? &snap.fans : NULL, snap.procs,
-                    snap.proc_count, snap.proc_total, &st);
+                    snap.proc_count, &snap.network, &snap.temperature, snap.proc_total, &st);
             dirty = 0;
             next_frame = now + MIN_FRAME_SECS;
         }

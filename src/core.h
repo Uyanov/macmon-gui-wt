@@ -4,6 +4,7 @@
 #include "proclist.h"
 #include "smc.h"
 #include "sysinfo.h"
+#include "network.h"
 
 #include <stdint.h>
 
@@ -18,6 +19,8 @@ enum {
     CORE_STALE_UP   = 1u << 4,
     CORE_STALE_PROC = 1u << 5,
     CORE_STALE_FAN  = 1u << 6,
+    CORE_STALE_NET  = 1u << 7,
+    CORE_STALE_TEMP = 1u << 8,
 };
 
 typedef struct {
@@ -28,6 +31,10 @@ typedef struct {
     long uptime;
     fan_info_t fans;
     int has_fans;
+    network_info_t network;
+    temperature_info_t temperature;
+    double sampled_at;             /* 单调时钟秒数，供前端派生真实时间趋势 */
+    uint64_t sampling_epoch;        /* 恢复采样时改变，前端据此断开趋势 */
     proc_info_t procs[CORE_PROC_ROWS];
     int proc_count;
     int proc_total;
