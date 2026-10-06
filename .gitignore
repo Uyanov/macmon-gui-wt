@@ -5,6 +5,24 @@ macmon-sanitize
 MacMonitor.app/
 screens/
 
+# 本地工具配置
+/.codex/
+.claude/settings.local.json
+
+# 本地环境变量（保留可提交的示例文件）
+.env
+.env.*
+!.env.example
+
+# 编辑器临时文件
+*.swp
+*.swo
+*~
+
+# Python 生成文件
+__pycache__/
+*.py[cod]
+
 # 访达留下的
 .DS_Store
 

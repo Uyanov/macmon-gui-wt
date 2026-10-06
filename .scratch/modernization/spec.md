@@ -2,7 +2,7 @@ Status: ready-for-agent
 
 # macmon 现代化改造 · Spec
 
-> 底稿：多代理审计报告 `.scratch/audit-2026-10-02.md`（17 条确认缺陷 + 40 条事实条目，证据在 `.scratch/audit-evidence/`）与 2026-10-02 grilling 已定决策。
+> 底稿：多代理审计报告 `docs/audits/2026-10-02/report.md`（17 条确认缺陷 + 40 条事实条目，证据在 `docs/audits/2026-10-02/evidence/`）与 2026-10-02 grilling 已定决策。
 
 ## Problem Statement
 
@@ -98,6 +98,6 @@ Status: ready-for-agent
 
 - **里程碑**：M1 地基（测试网 + 核心解耦 + 核心侧缺陷 #2/#7/#8 + 夹具修复）→ M2 TUI 稳性 + 性能（#1/#3/#6 修复 + 常量/名称缓存）→ M3 GUI v1 → M4 分发收官（#4/#5/#10/#11 + README）。v1.5：菜单栏。
 - **验收要点**：审计复现步骤不再触发（resize）；tick 成本较基线降 ≥25%；双击启动不经 Terminal；`make test` 全绿 + pty 回归通过。
-- **证据索引**：审计报告 `.scratch/audit-2026-10-02.md`；抓屏证据 `.scratch/audit-evidence/`。
+- **证据索引**：审计报告 `docs/audits/2026-10-02/report.md`；抓屏证据 `docs/audits/2026-10-02/evidence/`。
 - **覆盖度盲区（诚实申报）**：未见真机 Apple Silicon、未做长时 soak、真实终端行为由 pty 推断——相关结论日后需实机复核。
 - **术语**：核心模块命名与快照结构词汇待 `GLOSSARY.md` 建立时固化（`/domain-modeling` 惰性创建）。

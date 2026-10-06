@@ -12,7 +12,7 @@ driver does the two things itself:
 Commands are read from stdin, one per line, `#` starts a comment:
 
     launch              start the binary (path: --bin, default ./macmon)
-    ss [label]          print the rendered screen; save to screens/<label>.txt
+    ss [label]          print the rendered screen; save to build/screens/<label>.txt
     key <name> [...]    send keys: up down left right pgup pgdn q space esc
                         enter tab bs f1..  or a single literal char
     type <text>         send literal text
@@ -528,7 +528,8 @@ def main():
     ap.add_argument('--rows', type=int, default=30)
     ap.add_argument('--ascii', action='store_true',
                     help='run with LANG=C so macmon uses its ASCII fallback glyphs')
-    ap.add_argument('--screens', default='screens')
+    ap.add_argument('--screens', default='build/screens',
+                    help='screen capture directory (default: build/screens)')
     args = ap.parse_args()
 
     s = Session(args.bin, args.cols, args.rows, utf8=not args.ascii)

@@ -50,7 +50,7 @@ make app          # 生成 MacMonitor.app，双击即可运行
 `Contents/MacOS/MacMonitor` 现在直接承载原生 AppKit 窗口，采样核心在后台线程运行，
 双击应用不需要启动 Terminal.app。GUI 跟随系统明暗模式，资源卡在宽窗口中四列排列，
 窄窗口中自动切换为两列；进程表点击 CPU 或内存列标题可切换排序。
-TUI 使用中文界面，并按终端显示列宽裁剪文字。TUI 仍可用 `./macmon` 运行；`packaging/launcher.sh`
+TUI 使用中文界面，并按终端显示列宽裁剪文字。TUI 仍可用 `./macmon` 运行；[旧启动脚本](docs/archive/launcher.sh)
 仅保留作历史参考，不参与当前打包。
 
 应用使用独立的监视屏幕与波形图标；`make app` 通过 Python 3 标准库绘制完整尺寸的
@@ -78,6 +78,29 @@ PNG 图标集，再用系统 `iconutil` 打包，无需安装第三方包。GUI 
 
 打包相关文件单独放在 [packaging/](packaging/)，不属于程序本身：
 `Info.plist`（模板，版本号由 Makefile 注入）、`make-icon.py`（应用图标绘制）。
+
+项目其余文件按用途组织：
+
+```text
+src/                          采样核心、TUI 和 GUI 源码
+tests/                        核心单元测试和 GUI 生命周期测试
+packaging/                    当前应用打包模板和图标生成脚本
+docs/
+  adr/                        架构决策
+  agents/                     工程技能的项目约定
+  audits/2026-10-02/           审计报告和原始证据
+  archive/                    早期笔记和已退役的启动脚本
+.scratch/modernization/       现代化改造 spec 和独立 tickets
+.claude/skills/run-macmon/     TUI 端到端测试技能和驱动
+build/                        编译产物、测试程序和临时抓屏
+```
+
+[文档导航](docs/README.md)汇总各类资料；[GLOSSARY.md](GLOSSARY.md)定义项目领域术语，
+[CHANGELOG.txt](CHANGELOG.txt)保留更新记录。
+
+TUI 驱动的 `ss` 命令默认将抓屏保存到 `build/screens/`，可用 `--screens <目录>` 指定其他位置。
+已有的临时抓屏已移入该目录；`make clean` 会清理整个 `build/`。需要长期保留的测试证据放在
+`docs/audits/<日期>/evidence/`。
 
 ## 几个值得注意的实现细节
 
